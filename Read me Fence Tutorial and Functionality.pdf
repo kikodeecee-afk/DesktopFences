@@ -1,0 +1,220 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> /Contents 8 0 R >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> /Contents 9 0 R >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>
+endobj
+8 0 obj
+<< /Length 7933 >>
+stream
+0.985 0.988 0.995 rg 0.0 0.0 612.0 792.0 re f
+0.118 0.227 0.541 rg 0.0 712.0 612.0 80.0 re f
+0.055 0.647 0.914 rg 0.0 708.0 612.0 4.0 re f
+BT /F2 18.0 Tf 1.000 1.000 1.000 rg 36.0 756.0 Td (DESKTOP FENCES - TUTORIAL & FUNCTIONALITY GUIDE) Tj ET
+BT /F1 10.0 Tf 0.820 0.890 0.990 rg 36.0 736.0 Td (Official Read-Only User Manual  |  Windows 10 & Windows 11 Edition  |  Zero-Duplicate Organizer) Tj ET
+BT /F1 8.5 Tf 0.680 0.800 0.960 rg 36.0 720.0 Td (Document Status: Uneditable Reference Manual  |  Page 1 of 2) Tj ET
+BT /F2 12.5 Tf 0.118 0.227 0.541 rg 36.0 682.0 Td (1. CORE FUNCTIONALITY & HOW IT WORKS) Tj ET
+0.118 0.227 0.541 rg 36.0 677.0 540.0 1.2 re f
+0.940 0.960 0.990 rg 36.0 576.0 540.0 94.0 re f
+0.80 w 0.780 0.840 0.940 RG 36.0 576.0 540.0 94.0 re S
+BT /F1 9.3 Tf 0.120 0.160 0.230 rg 46.0 655.0 Td (- 100% Untouched Native Windows Desktop: Never hides or overlays your native desktop wallpaper or icons.) Tj ET
+BT /F1 9.3 Tf 0.120 0.160 0.230 rg 46.0 641.5 Td (- Zero-Duplicate Instant Transfer: Dragging icons into a fence MOVES them cleanly \(never creates duplicates\).) Tj ET
+BT /F1 9.3 Tf 0.120 0.160 0.230 rg 46.0 628.0 Td (- Transparent Hover-Reveal Theme: Borders, header bar, and scrollbars stay 100% invisible on your wallpaper) Tj ET
+BT /F1 9.3 Tf 0.120 0.160 0.230 rg 46.0 614.5 Td (  until you hover your cursor inside a specific fence box. Also includes 10 rich color themes + Dark/Light mode.) Tj ET
+BT /F1 9.3 Tf 0.120 0.160 0.230 rg 46.0 601.0 Td (- Two-Way Sync & Safe Restore: Deleting a fence or clicking 'Restore All Icons' returns all files to Desktop.) Tj ET
+BT /F1 9.3 Tf 0.120 0.160 0.230 rg 46.0 587.5 Td (- Survives Win + D \(Show Desktop\): Fences stay pinned to your desktop layer behind regular app windows.) Tj ET
+BT /F2 12.5 Tf 0.118 0.227 0.541 rg 36.0 552.0 Td (2. LEFT-CLICK MOUSE CONTROLS \(MOVING, LAUNCHING & SELECTING\)) Tj ET
+0.118 0.227 0.541 rg 36.0 547.0 540.0 1.2 re f
+0.150 0.280 0.620 rg 36.0 524.0 540.0 20.0 re f
+BT /F2 9.5 Tf 1.000 1.000 1.000 rg 44.0 530.0 Td (LEFT-CLICK ACTION) Tj ET
+BT /F2 9.5 Tf 1.000 1.000 1.000 rg 235.0 530.0 Td (WHAT IT DOES) Tj ET
+1.000 1.000 1.000 rg 36.0 500.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 500.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 507.0 Td (Single Left-Click \(on Icon\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 507.0 Td (Selects that icon inside the fence.) Tj ET
+0.945 0.962 0.988 rg 36.0 480.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 480.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 487.0 Td (Double Left-Click \(on Icon\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 487.0 Td (Launches / opens the application, shortcut, file, or folder.) Tj ET
+1.000 1.000 1.000 rg 36.0 460.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 460.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 467.0 Td (Double Left-Click \(Fence Title\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 467.0 Td (Opens inline text editor to rename the fence title \(press Enter to save\).) Tj ET
+0.945 0.962 0.988 rg 36.0 440.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 440.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 447.0 Td (Hold Left-Click + Drag \(Empty Box\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 447.0 Td (Moves the entire Fence Frame smoothly from ANY empty spot inside the box.) Tj ET
+1.000 1.000 1.000 rg 36.0 420.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 420.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 427.0 Td (Hold Left-Click + Drag \(Header Bar\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 427.0 Td (Moves the Fence Frame with automatic magnetic screen & fence snapping.) Tj ET
+0.945 0.962 0.988 rg 36.0 400.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 400.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 407.0 Td (Hold Left-Click + Drag \(on Icon\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 407.0 Td (Moves the selected icon \(or ALL selected icons\) to another fence or Desktop.) Tj ET
+1.000 1.000 1.000 rg 36.0 380.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 380.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 387.0 Td (Hold Left-Click + Drag \(Outer Edges\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 387.0 Td (Resizes the fence 1:1 from any of the 8 outer borders or corners.) Tj ET
+0.945 0.962 0.988 rg 36.0 360.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 360.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 367.0 Td (Ctrl + Left-Click \(on Icons\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 367.0 Td (Toggles individual icons ON/OFF to build a custom multi-icon selection.) Tj ET
+1.000 1.000 1.000 rg 36.0 340.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 340.0 540.0 20.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 347.0 Td (Shift + Left-Click \(Click or Drag\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 347.0 Td (Selects a continuous range of icons OR draws a multi-select marquee box.) Tj ET
+BT /F2 12.5 Tf 0.118 0.227 0.541 rg 36.0 304.0 Td (3. RIGHT-CLICK MOUSE CONTROLS \(MULTI-SELECT, SORT & LOCK\)) Tj ET
+0.118 0.227 0.541 rg 36.0 299.0 540.0 1.2 re f
+0.150 0.280 0.620 rg 36.0 276.0 540.0 20.0 re f
+BT /F2 9.5 Tf 1.000 1.000 1.000 rg 44.0 282.0 Td (RIGHT-CLICK ACTION) Tj ET
+BT /F2 9.5 Tf 1.000 1.000 1.000 rg 235.0 282.0 Td (WHAT IT DOES) Tj ET
+1.000 1.000 1.000 rg 36.0 252.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 252.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 260.0 Td (Hold Right-Click + Drag \(Inside Box\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 260.0 Td (Draws glowing Marquee Selection Box to select multiple icons at once.) Tj ET
+0.945 0.962 0.988 rg 36.0 230.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 230.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 238.0 Td (Shift + Hold Right-Click + Drag) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 238.0 Td (Draws Marquee Selection Box while ADDING to your already-selected icons.) Tj ET
+1.000 1.000 1.000 rg 36.0 208.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 208.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 216.0 Td (Right-Click Empty Space / Header) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 216.0 Td (Opens Fence Menu: Sort by, Hold/Lock Movement, New Fence, Color Themes.) Tj ET
+0.945 0.962 0.988 rg 36.0 186.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 186.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 194.0 Td (Right-Click -> Sort by) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 194.0 Td (Option buttons to auto-sort by Name, Size, Item Type, or Date Modified.) Tj ET
+1.000 1.000 1.000 rg 36.0 164.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 164.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 172.0 Td (Right-Click -> Hold / Lock Position) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 172.0 Td (Pins fence in place \(or sets 0.35s Hold Delay\) to stop accidental dragging.) Tj ET
+0.945 0.962 0.988 rg 36.0 142.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 142.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 150.0 Td (Right-Click \(on an Icon\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 150.0 Td (Opens Item Menu: Open, Run as Admin, Move to Desktop/Fence, Delete, Props.) Tj ET
+1.000 1.000 1.000 rg 36.0 120.0 540.0 22.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 120.0 540.0 22.0 re S
+BT /F2 8.8 Tf 0.100 0.180 0.350 rg 44.0 128.0 Td (Right-Click System Tray Icon) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 128.0 Td (Opens Global Menu: New Fence, Transparent Theme, Dark/Light, Restore All.) Tj ET
+0.780 0.820 0.880 rg 36.0 34.0 540.0 0.8 re f
+BT /F1 8.5 Tf 0.420 0.470 0.550 rg 36.0 20.0 Td (Desktop Fences User Manual & Tutorial  -  Continue to Page 2 for Header Controls, Themes, Hotkeys & Step-by-Step Guide) Tj ET
+
+endstream
+endobj
+9 0 obj
+<< /Length 7040 >>
+stream
+0.985 0.988 0.995 rg 0.0 0.0 612.0 792.0 re f
+0.118 0.227 0.541 rg 0.0 726.0 612.0 66.0 re f
+0.055 0.647 0.914 rg 0.0 722.0 612.0 4.0 re f
+BT /F2 15.5 Tf 1.000 1.000 1.000 rg 36.0 756.0 Td (DESKTOP FENCES - OPERATION, THEMES & SHORTCUTS) Tj ET
+BT /F1 9.5 Tf 0.820 0.890 0.990 rg 36.0 736.0 Td (Step-by-Step Operation Guide, Header Buttons, Movement Modes & Keyboard Shortcuts  |  Page 2 of 2) Tj ET
+BT /F2 12.5 Tf 0.118 0.227 0.541 rg 36.0 694.0 Td (4. STEP-BY-STEP HOW TO OPERATE YOUR FENCES) Tj ET
+0.118 0.227 0.541 rg 36.0 689.0 540.0 1.2 re f
+0.940 0.960 0.990 rg 36.0 544.0 540.0 138.0 re f
+0.80 w 0.780 0.840 0.940 RG 36.0 544.0 540.0 138.0 re S
+BT /F2 9.0 Tf 0.120 0.160 0.240 rg 46.0 667.0 Td (Step 1 - Organize Icons \(Drag & Drop\): Select one or multiple icons on your Windows Desktop and drag them) Tj ET
+BT /F1 9.0 Tf 0.120 0.160 0.240 rg 46.0 654.0 Td (         into any fence box. They move instantly with zero duplicates. Drag out to Desktop anytime to return.) Tj ET
+BT /F2 9.0 Tf 0.120 0.160 0.240 rg 46.0 641.0 Td (Step 2 - Hover to Reveal Controls: In 'Transparent' theme, fences stay completely invisible over your wallpaper.) Tj ET
+BT /F1 9.0 Tf 0.120 0.160 0.240 rg 46.0 628.0 Td (         Simply move your cursor inside a box to pop out its glowing border, title bar, and top-right buttons.) Tj ET
+BT /F2 9.0 Tf 0.120 0.160 0.240 rg 46.0 615.0 Td (Step 3 - Prevent Accidental Dragging: Right-click inside a fence -> check 'Hold / Lock Fence Position', OR) Tj ET
+BT /F1 9.0 Tf 0.120 0.160 0.240 rg 46.0 602.0 Td (         open 'Hold & Movement Setting' and pick 'Hold Left-Click \(0.35s Delay\) to Move Box'.) Tj ET
+BT /F2 9.0 Tf 0.120 0.160 0.240 rg 46.0 589.0 Td (Step 4 - Auto-Sort Icons: Right-click inside any fence -> 'Sort by' -> pick Name, Size, Item Type, or) Tj ET
+BT /F1 9.0 Tf 0.120 0.160 0.240 rg 46.0 576.0 Td (         Date Modified \(or open 'Auto-Sort Settings...' for the interactive Option Buttons panel\).) Tj ET
+BT /F2 9.0 Tf 0.120 0.160 0.240 rg 46.0 563.0 Td (Step 5 - Collapse / Shade a Fence: Click the arrow button on the top-right of a fence header to roll it up) Tj ET
+BT /F1 9.0 Tf 0.120 0.160 0.240 rg 46.0 550.0 Td (         into a compact strip; hovering over the strip smoothly expands your icons on demand.) Tj ET
+BT /F2 12.5 Tf 0.118 0.227 0.541 rg 36.0 520.0 Td (5. FENCE HEADER BAR BUTTONS & 11 BUILT-IN THEMES) Tj ET
+0.118 0.227 0.541 rg 36.0 515.0 540.0 1.2 re f
+1.000 1.000 1.000 rg 36.0 418.0 540.0 90.0 re f
+0.80 w 0.820 0.870 0.930 RG 36.0 418.0 540.0 90.0 re S
+BT /F1 9.1 Tf 0.130 0.180 0.260 rg 46.0 493.0 Td (- Palette Button \(Top-Right\): Switch per-fence themes: Transparent \(Hover Reveal\), Navy Blue, Rose Pink,) Tj ET
+BT /F1 9.1 Tf 0.130 0.180 0.260 rg 46.0 479.5 Td (  Midnight Ocean, Obsidian Slate, Emerald Moss, Royal Amethyst, Sunset Amber, Crimson Ruby, Nordic Ice,) Tj ET
+BT /F1 9.1 Tf 0.130 0.180 0.260 rg 46.0 466.0 Td (  Stealth Glass, or enter any Custom Hex Color \(#RRGGBB\).) Tj ET
+BT /F1 9.1 Tf 0.130 0.180 0.260 rg 46.0 452.5 Td (- Dark / Light Pill Switch \(Top-Right\): Instantly toggles all fences between Dark Glass and Light Glass.) Tj ET
+BT /F1 9.1 Tf 0.130 0.180 0.260 rg 46.0 439.0 Td (- Roll-Up Arrow Button \(Top-Right\): Collapses the fence to a thin bar; expands automatically on mouse hover.) Tj ET
+BT /F1 9.1 Tf 0.130 0.180 0.260 rg 46.0 425.5 Td (- Auto-Hiding Slim Scrollbar: Appears as a subtle 6px pill ONLY while hovering inside an overflowing fence.) Tj ET
+BT /F2 12.5 Tf 0.118 0.227 0.541 rg 36.0 392.0 Td (6. KEYBOARD SHORTCUTS & GLOBAL HOTKEYS) Tj ET
+0.118 0.227 0.541 rg 36.0 387.0 540.0 1.2 re f
+0.150 0.280 0.620 rg 36.0 364.0 540.0 20.0 re f
+BT /F2 9.5 Tf 1.000 1.000 1.000 rg 44.0 370.0 Td (SHORTCUT KEY) Tj ET
+BT /F2 9.5 Tf 1.000 1.000 1.000 rg 235.0 370.0 Td (FUNCTION) Tj ET
+1.000 1.000 1.000 rg 36.0 340.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 340.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 347.0 Td (Ctrl + Alt + N  \(Global\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 347.0 Td (Creates a brand-new Fence anywhere on your desktop.) Tj ET
+0.945 0.962 0.988 rg 36.0 320.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 320.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 327.0 Td (Ctrl + Alt + H  \(Global\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 327.0 Td (Quick-Hides or Shows all fences for a 100% clean wallpaper view.) Tj ET
+1.000 1.000 1.000 rg 36.0 300.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 300.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 307.0 Td (Ctrl + Alt + Space  \(Global\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 307.0 Td (Peek Mode: Temporarily brings all fences ON TOP of open windows.) Tj ET
+0.945 0.962 0.988 rg 36.0 280.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 280.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 287.0 Td (Ctrl + A  \(Inside Fence\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 287.0 Td (Selects all icons inside the active fence.) Tj ET
+1.000 1.000 1.000 rg 36.0 260.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 260.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 267.0 Td (Enter  /  Alt + Enter) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 267.0 Td (Enter launches selected icon\(s\); Alt + Enter opens Windows Properties.) Tj ET
+0.945 0.962 0.988 rg 36.0 240.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 240.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 247.0 Td (F2  \(Inside Fence\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 247.0 Td (Renames the selected file, folder, or shortcut directly on disk.) Tj ET
+1.000 1.000 1.000 rg 36.0 220.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 220.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 227.0 Td (Delete  /  Shift + Delete) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 227.0 Td (Sends selected item\(s\) to Recycle Bin \(or Shift+Delete permanently\).) Tj ET
+0.945 0.962 0.988 rg 36.0 200.0 540.0 20.0 re f
+0.50 w 0.850 0.890 0.940 RG 36.0 200.0 540.0 20.0 re S
+BT /F3 8.8 Tf 0.100 0.180 0.350 rg 44.0 207.0 Td (Esc  \(Inside Fence\)) Tj ET
+BT /F1 8.8 Tf 0.150 0.200 0.280 rg 235.0 207.0 Td (Clears current multi-icon selection or cancels an active drag/resize.) Tj ET
+0.920 0.970 0.940 rg 36.0 112.0 540.0 56.0 re f
+0.90 w 0.160 0.620 0.420 RG 36.0 112.0 540.0 56.0 re S
+BT /F2 9.8 Tf 0.060 0.420 0.240 rg 46.0 151.0 Td (SAFE FILE HANDLING GUARANTEE) Tj ET
+BT /F1 8.9 Tf 0.120 0.240 0.180 rg 46.0 136.0 Td (Your files are never locked into a proprietary database. Deleting a fence, clicking 'Restore All Fenced Icons to) Tj ET
+BT /F1 8.9 Tf 0.120 0.240 0.180 rg 46.0 123.0 Td (Desktop' in the System Tray, or running the Uninstaller moves every fenced item back to your Windows Desktop.) Tj ET
+0.780 0.820 0.880 rg 36.0 34.0 540.0 0.8 re f
+BT /F1 8.5 Tf 0.420 0.470 0.550 rg 36.0 20.0 Td (Desktop Fences  |  Read-Only Tutorial & Functionality Guide  |  Windows 10 & Windows 11) Tj ET
+
+endstream
+endobj
+10 0 obj
+<< /Title (Read me Fence Tutorial and Functionality) /Author (Desktop Fences) /Subject (User Manual & Mouse Controls Reference) >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000267 00000 n 
+0000000413 00000 n 
+0000000510 00000 n 
+0000000612 00000 n 
+0000000712 00000 n 
+0000008697 00000 n 
+0000015789 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R /Info 10 0 R >>
+startxref
+15936
+%%EOF

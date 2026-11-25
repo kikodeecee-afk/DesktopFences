@@ -632,6 +632,8 @@ namespace DesktopFences
         public string CustomColorHex { get; set; }
         public string SortBy { get; set; }
         public bool SortDescending { get; set; }
+        public bool HoldPosition { get; set; }
+        public string MoveMode { get; set; }
         public List<string> OrderedFileNames { get; set; }
 
         public FenceModel()
@@ -647,6 +649,8 @@ namespace DesktopFences
             CustomColorHex = "";
             SortBy = "None";
             SortDescending = false;
+            HoldPosition = false;
+            MoveMode = "Anywhere";
             OrderedFileNames = new List<string>();
         }
     }
@@ -1360,6 +1364,15 @@ namespace DesktopFences
         private bool _collapseToSingleOnUp;
         private bool _suppressNextContextMenu;
 
+        // Anchor-Based 1:1 Fence Body Drag-Move & Hold-Movement Lock State
+        private bool _isPotentialBodyFenceMove;
+        private bool _isMovingFence;
+        private NativeMethods.POINT _moveStartCursorPx;
+        private Point _moveStartWindowDip;
+        private double _moveDpiX = 1.0;
+        private double _moveDpiY = 1.0;
+        private DispatcherTimer _holdToMoveTimer;
+
         // Bug 1 Fix: Anchor-Based 1:1 Absolute Screen Resize State
         private bool _isResizing;
         private ResizeDirection _resizeDir = ResizeDirection.None;
@@ -1593,7 +1606,11 @@ namespace DesktopFences
             _bodyGrid.PreviewMouseMove += OnBodyPreviewMouseMove;
             _bodyGrid.PreviewMouseLeftButtonUp += OnBodyPreviewMouseUp;
             _bodyGrid.PreviewMouseRightButtonUp += OnBodyPreviewMouseUp;
-            _bodyGrid.LostMouseCapture += (_, __) => EndMarqueeSelection();
+            _bodyGrid.LostMouseCapture += (_, __) =>
+            {
+                EndBodyFenceMove(saveAndSnap: false);
+                EndMarqueeSelection();
+            };
             _bodyGrid.ContextMenu = new ContextMenu();
             _bodyGrid.ContextMenuOpening += (s, e) =>
             {
@@ -1729,9 +1746,16 @@ namespace DesktopFences
             return grip;
         }
 
+        private bool IsFenceMovementLocked()
+        {
+            return ConfigManager.Current.LockLayout ||
+                   Model.HoldPosition ||
+                   string.Equals(Model.MoveMode, "Locked", StringComparison.OrdinalIgnoreCase);
+        }
+
         private void BeginAnchorResize(UIElement grip, ResizeDirection dir, MouseButtonEventArgs e)
         {
-            if (ConfigManager.Current.LockLayout || Model.IsRolledUp)
+            if (IsFenceMovementLocked() || Model.IsRolledUp)
                 return;
 
             NativeMethods.POINT pt;
@@ -1914,13 +1938,51 @@ namespace DesktopFences
             // LEFT-CLICK:
             if (e.ChangedButton == MouseButton.Left)
             {
-                // Case A: Clicked on empty space (not an icon tile), OR holding Shift/Ctrl while starting drag -> Marquee capable!
+                // Case A: Clicked on empty space inside the fence box (not an icon tile)
                 if (string.IsNullOrEmpty(hitTilePath))
                 {
                     _isTileLeftDragPending = false;
                     if (!shift && !ctrl)
                         ClearSelection();
 
+                    string moveMode = string.IsNullOrWhiteSpace(Model.MoveMode) ? "Anywhere" : Model.MoveMode;
+                    bool canMoveFromBody = !shift && !ctrl && !IsFenceMovementLocked() &&
+                                           !string.Equals(moveMode, "HeaderOnly", StringComparison.OrdinalIgnoreCase);
+
+                    if (canMoveFromBody)
+                    {
+                        CaptureDpiForMoveAndInitAnchor();
+
+                        if (string.Equals(moveMode, "HoldDelay", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Hold Left-Click for 0.35s to pick up fence; quick swipe (<0.35s) does marquee selection!
+                            _isPotentialBodyFenceMove = false;
+                            _isMovingFence = false;
+                            _marqueeInitialSelection = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            _isPotentialMarquee = true;
+                            _isMarqueeActive = false;
+                            _marqueeButton = MouseButton.Left;
+                            _marqueeStartPt = e.GetPosition(_marqueeOverlayCanvas);
+
+                            StartHoldToMoveTimer();
+                            _bodyGrid.CaptureMouse();
+                            e.Handled = true;
+                            return;
+                        }
+                        else
+                        {
+                            // Default "Anywhere": Holding Left-Click anywhere inside the box moves the fence smoothly!
+                            _isPotentialMarquee = false;
+                            _isMarqueeActive = false;
+                            _isPotentialBodyFenceMove = true;
+                            _isMovingFence = false;
+                            _bodyGrid.CaptureMouse();
+                            e.Handled = true;
+                            return;
+                        }
+                    }
+
+                    // If movement is Held/Locked, HeaderOnly, or Shift/Ctrl is held -> Left-Click Marquee Selection!
                     _marqueeInitialSelection = (shift || ctrl)
                         ? new HashSet<string>(_selectedPaths, StringComparer.OrdinalIgnoreCase)
                         : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1970,8 +2032,106 @@ namespace DesktopFences
             }
         }
 
+        private void CaptureDpiForMoveAndInitAnchor()
+        {
+            NativeMethods.GetCursorPos(out _moveStartCursorPx);
+            _moveStartWindowDip = new Point(Left, Top);
+            var source = PresentationSource.FromVisual(this);
+            if (source != null && source.CompositionTarget != null)
+            {
+                _moveDpiX = source.CompositionTarget.TransformToDevice.M11;
+                _moveDpiY = source.CompositionTarget.TransformToDevice.M22;
+            }
+            else
+            {
+                _moveDpiX = 1.0;
+                _moveDpiY = 1.0;
+            }
+        }
+
+        private void StartHoldToMoveTimer()
+        {
+            StopHoldToMoveTimer();
+            _holdToMoveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+            _holdToMoveTimer.Tick += (_, __) =>
+            {
+                StopHoldToMoveTimer();
+                if (Mouse.LeftButton == MouseButtonState.Pressed && !_isMarqueeActive && !IsFenceMovementLocked())
+                {
+                    _isPotentialMarquee = false;
+                    _marqueeRect.Visibility = Visibility.Collapsed;
+                    CaptureDpiForMoveAndInitAnchor();
+                    _isMovingFence = true;
+                    _bodyGrid.Cursor = Cursors.SizeAll;
+                    ApplyTransparentHoverChromeState(animate: false);
+                }
+            };
+            _holdToMoveTimer.Start();
+        }
+
+        private void StopHoldToMoveTimer()
+        {
+            if (_holdToMoveTimer != null)
+            {
+                _holdToMoveTimer.Stop();
+                _holdToMoveTimer = null;
+            }
+        }
+
+        private void EndBodyFenceMove(bool saveAndSnap)
+        {
+            StopHoldToMoveTimer();
+            bool wasMoving = _isMovingFence;
+            _isPotentialBodyFenceMove = false;
+            _isMovingFence = false;
+            if (_bodyGrid != null)
+                _bodyGrid.Cursor = null;
+
+            if (Mouse.Captured == _bodyGrid && !_isPotentialMarquee && !_isMarqueeActive)
+                _bodyGrid.ReleaseMouseCapture();
+
+            if (wasMoving && saveAndSnap)
+            {
+                ApplyMagneticSnap();
+                ConfigManager.SaveAsync();
+                ApplyTransparentHoverChromeState(animate: true);
+            }
+        }
+
         private void OnBodyPreviewMouseMove(object sender, MouseEventArgs e)
         {
+            // 0. Check Anchor-Based 1:1 Fence Frame Drag-Move from anywhere inside the box!
+            if (_isPotentialBodyFenceMove || _isMovingFence)
+            {
+                if (e.LeftButton != MouseButtonState.Pressed || IsFenceMovementLocked())
+                {
+                    EndBodyFenceMove(saveAndSnap: true);
+                    return;
+                }
+
+                NativeMethods.POINT curPx;
+                if (!NativeMethods.GetCursorPos(out curPx))
+                    return;
+
+                double dxDip = (curPx.X - _moveStartCursorPx.X) / _moveDpiX;
+                double dyDip = (curPx.Y - _moveStartCursorPx.Y) / _moveDpiY;
+
+                if (!_isMovingFence)
+                {
+                    if (Math.Abs(dxDip) < 4.0 && Math.Abs(dyDip) < 4.0)
+                        return; // 4px threshold prevents accidental nudge on single click
+
+                    _isMovingFence = true;
+                    _bodyGrid.Cursor = Cursors.SizeAll;
+                    ApplyTransparentHoverChromeState(animate: false);
+                }
+
+                Left = _moveStartWindowDip.X + dxDip;
+                Top = _moveStartWindowDip.Y + dyDip;
+                e.Handled = true;
+                return;
+            }
+
             // 1. Check Group File Drag-and-Drop (Left-Click dragging an icon tile)
             if (_isTileLeftDragPending && e.LeftButton == MouseButtonState.Pressed && !ConfigManager.Current.LockLayout)
             {
@@ -2025,6 +2185,8 @@ namespace DesktopFences
                 if (dx < 4.0 && dy < 4.0)
                     return; // 4px drag threshold before activating rubber-band rectangle
 
+                // If user swiped quickly before 0.35s Hold-to-Move elapsed, cancel Hold-to-Move and enter Marquee!
+                StopHoldToMoveTimer();
                 _isMarqueeActive = true;
                 _isTileLeftDragPending = false;
                 if (_marqueeButton == MouseButton.Right)
@@ -2053,7 +2215,17 @@ namespace DesktopFences
 
         private void OnBodyPreviewMouseUp(object sender, MouseButtonEventArgs e)
         {
+            StopHoldToMoveTimer();
             _isTileLeftDragPending = false;
+
+            if (_isPotentialBodyFenceMove || _isMovingFence)
+            {
+                bool moved = _isMovingFence;
+                EndBodyFenceMove(saveAndSnap: true);
+                if (moved)
+                    e.Handled = true;
+                return;
+            }
 
             if (_collapseToSingleOnUp && e.ChangedButton == MouseButton.Left && !string.IsNullOrEmpty(_pressedTilePath))
             {
@@ -2163,6 +2335,7 @@ namespace DesktopFences
         private void CancelActiveInteractions()
         {
             StopAnchorResizeImmediate();
+            EndBodyFenceMove(saveAndSnap: true);
             EndMarqueeSelection();
             DesktopHostManager.UpdateZOrder(new WindowInteropHelper(this).Handle);
         }
@@ -2552,6 +2725,7 @@ namespace DesktopFences
 
             cm.Items.Add(new Separator());
             cm.Items.Add(BuildSortBySubmenu());
+            cm.Items.Add(BuildHoldMovementSubmenu());
             cm.Items.Add(new Separator());
 
             var propsItem = new MenuItem { Header = "Properties (Alt+Enter)" };
@@ -2813,6 +2987,7 @@ namespace DesktopFences
                    _isDragOverActive ||
                    _isPopupMenuOpen ||
                    _isResizing ||
+                   _isMovingFence ||
                    _isMarqueeActive ||
                    (_titleEditBox != null && _titleEditBox.Visibility == Visibility.Visible);
         }
@@ -3356,17 +3531,113 @@ namespace DesktopFences
             dlg.ShowDialog();
         }
 
+        private void SetFenceMovementMode(string mode, bool holdLocked)
+        {
+            Model.MoveMode = mode;
+            Model.HoldPosition = holdLocked;
+            ConfigManager.SaveAsync();
+        }
+
+        private MenuItem BuildHoldMovementSubmenu()
+        {
+            string mode = string.IsNullOrWhiteSpace(Model.MoveMode) ? "Anywhere" : Model.MoveMode;
+            bool isLocked = IsFenceMovementLocked();
+
+            var moveRoot = new MenuItem
+            {
+                Header = isLocked ? "🔒 Hold Movement (Locked)" : "✥ Hold & Movement Setting",
+                FontWeight = FontWeights.SemiBold
+            };
+
+            moveRoot.Items.Add(CreateRadioOptionMenuItem(
+                "Move by Holding Left-Click Anywhere in Box",
+                !isLocked && string.Equals(mode, "Anywhere", StringComparison.OrdinalIgnoreCase),
+                () => SetFenceMovementMode("Anywhere", false)));
+
+            moveRoot.Items.Add(CreateRadioOptionMenuItem(
+                "Hold Left-Click (0.35s Delay) to Move Box",
+                !isLocked && string.Equals(mode, "HoldDelay", StringComparison.OrdinalIgnoreCase),
+                () => SetFenceMovementMode("HoldDelay", false)));
+
+            moveRoot.Items.Add(CreateRadioOptionMenuItem(
+                "Move from Top Header Bar Only",
+                !isLocked && string.Equals(mode, "HeaderOnly", StringComparison.OrdinalIgnoreCase),
+                () => SetFenceMovementMode("HeaderOnly", false)));
+
+            moveRoot.Items.Add(CreateRadioOptionMenuItem(
+                "🔒 Hold / Lock Fence in Place (No Accidental Drag)",
+                isLocked,
+                () =>
+                {
+                    ConfigManager.Current.LockLayout = false;
+                    SetFenceMovementMode("Locked", true);
+                }));
+
+            moveRoot.Items.Add(new Separator());
+
+            var lockAllItem = new MenuItem
+            {
+                Header = ConfigManager.Current.LockLayout
+                    ? "🔓 Unlock Movement on All Fences"
+                    : "🔒 Hold / Lock Movement on All Fences"
+            };
+            lockAllItem.Click += (_, __) =>
+            {
+                bool targetLock = !ConfigManager.Current.LockLayout;
+                ConfigManager.Current.LockLayout = targetLock;
+                if (!targetLock)
+                {
+                    foreach (var f in ConfigManager.Current.Fences)
+                    {
+                        f.HoldPosition = false;
+                        if (string.Equals(f.MoveMode, "Locked", StringComparison.OrdinalIgnoreCase))
+                            f.MoveMode = "Anywhere";
+                    }
+                }
+                ConfigManager.SaveAsync();
+            };
+            moveRoot.Items.Add(lockAllItem);
+
+            return moveRoot;
+        }
+
         private ContextMenu BuildFenceHeaderContextMenu()
         {
             var menu = new ContextMenu();
             menu.Opened += (_, __) => { _isPopupMenuOpen = true; ApplyTransparentHoverChromeState(animate: false); };
             menu.Closed += (_, __) => { _isPopupMenuOpen = false; ApplyTransparentHoverChromeState(animate: true); };
 
-            // Top-level Sort by submenu + Option Buttons Dialog right at the top when right-clicking inside a fence!
+            // Top-level Sort by + Hold Movement Controls right at the top when right-clicking inside a fence!
             menu.Items.Add(BuildSortBySubmenu());
             var sortDialogItem = new MenuItem { Header = "⚙ Auto-Sort Settings..." };
             sortDialogItem.Click += (_, __) => OpenAutoSortDialog();
             menu.Items.Add(sortDialogItem);
+
+            menu.Items.Add(new Separator());
+
+            bool isLocked = IsFenceMovementLocked();
+            var quickHoldLockItem = new MenuItem
+            {
+                Header = "🔒 Hold / Lock Fence Position (Prevent Accidental Drag)",
+                IsCheckable = true,
+                IsChecked = isLocked,
+                FontWeight = FontWeights.SemiBold
+            };
+            quickHoldLockItem.Click += (_, __) =>
+            {
+                if (isLocked)
+                {
+                    ConfigManager.Current.LockLayout = false;
+                    SetFenceMovementMode("Anywhere", false);
+                }
+                else
+                {
+                    SetFenceMovementMode("Locked", true);
+                }
+            };
+            menu.Items.Add(quickHoldLockItem);
+            menu.Items.Add(BuildHoldMovementSubmenu());
+
             menu.Items.Add(new Separator());
 
             var newFenceItem = new MenuItem { Header = "＋ Create New Fence (Ctrl+Alt+N)", FontWeight = FontWeights.SemiBold };
@@ -3444,18 +3715,11 @@ namespace DesktopFences
                 return;
             }
 
-            if (e.ButtonState == MouseButtonState.Pressed && !ConfigManager.Current.LockLayout)
+            if (e.ButtonState == MouseButtonState.Pressed && !IsFenceMovementLocked())
             {
-                if (!OsVersionHelper.IsWindows11_22H2OrNewer)
-                    WindowBackdropManager.ApplyFrostedGlass(this, ConfigManager.Current.IsDarkMode, enableAcrylic: false);
-
                 DragMove();
                 ApplyMagneticSnap();
-
-                if (!OsVersionHelper.IsWindows11_22H2OrNewer)
-                    WindowBackdropManager.ApplyFrostedGlass(this, ConfigManager.Current.IsDarkMode, enableAcrylic: true);
-
-                ConfigManager.Save();
+                ConfigManager.SaveAsync();
             }
         }
 
