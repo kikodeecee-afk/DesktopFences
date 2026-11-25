@@ -74,6 +74,11 @@ namespace DesktopFencesSetup
                 {
                     if (runKey != null) runKey.DeleteValue("DesktopFences", false);
                 }
+                try
+                {
+                    Process.Start(new ProcessStartInfo("schtasks.exe", "/Delete /TN \"DesktopFences_InstantLogon\" /F") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+                }
+                catch { }
                 Registry.CurrentUser.DeleteSubKeyTree(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\DesktopFences", false);
             }
             catch { }
@@ -231,6 +236,24 @@ namespace DesktopFencesSetup
                         if (runKey != null)
                             runKey.SetValue("DesktopFences", "\"" + targetExe + "\"");
                     }
+
+                    // Eliminate Windows 10/11 Explorer 10-second StartupDelayInMSec & register zero-delay Logon Task + NGEN native image!
+                    try
+                    {
+                        using (var serializeKey = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize"))
+                        {
+                            if (serializeKey != null)
+                            {
+                                serializeKey.SetValue("StartupDelayInMSec", 0, RegistryValueKind.DWord);
+                                serializeKey.SetValue("WaitForIdleState", 0, RegistryValueKind.DWord);
+                            }
+                        }
+                        Process.Start(new ProcessStartInfo("schtasks.exe", "/Create /TN \"DesktopFences_InstantLogon\" /TR \"\\\"" + targetExe + "\\\"\" /SC ONLOGON /DELAY 0000:00 /F") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+                        string ngen64 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"Microsoft.NET\Framework64\v4.0.30319\ngen.exe");
+                        if (File.Exists(ngen64))
+                            Process.Start(new ProcessStartInfo(ngen64, "install \"" + targetExe + "\" /nologo") { CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden });
+                    }
+                    catch { }
                 }
 
                 // Register in Windows Installed Apps (Add/Remove Programs)

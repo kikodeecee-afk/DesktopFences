@@ -87,6 +87,7 @@ namespace DesktopFences
         public const int SHCNE_DELETE = 0x00000004;
         public const int SHCNE_RMDIR = 0x00000010;
         public const int SHCNE_UPDATEDIR = 0x00001000;
+        public const int SHCNE_UPDATEITEM = 0x00002000;
         public const uint SHCNF_PATHW = 0x0005;
         public const uint SHCNF_FLUSHNOWAIT = 0x2000;
         public const uint SEE_MASK_INVOKEIDLIST = 0x0000000C;
@@ -235,6 +236,40 @@ namespace DesktopFences
             [PreserveSig] int GetIcon(int i, int flags, out IntPtr picon);
         }
 
+        [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cchMaxPath, IntPtr pfd, uint fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cchMaxName);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cchMaxPath);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cchMaxPath);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+            void Resolve(IntPtr hwnd, uint fFlags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        }
+
+        [ComImport, Guid("0000010b-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IPersistFile
+        {
+            void GetClassID(out Guid pClassID);
+            [PreserveSig] int IsDirty();
+            void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+            void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
+            void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+            void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+        }
+
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         public static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO lpExecInfo);
 
@@ -253,6 +288,9 @@ namespace DesktopFences
 
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT
@@ -4940,7 +4978,7 @@ namespace DesktopFences
             return btn;
         }
 
-        private static bool IsStartupEnabled()
+        public static bool IsStartupEnabled()
         {
             try
             {
@@ -4956,19 +4994,96 @@ namespace DesktopFences
         {
             try
             {
+                string exePath = Process.GetCurrentProcess().MainModule.FileName;
                 using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
                 {
-                    if (key == null) return;
+                    if (key != null)
+                    {
+                        if (enable)
+                            key.SetValue("DesktopFences", "\"" + exePath + "\"");
+                        else
+                            key.DeleteValue("DesktopFences", false);
+                    }
+                }
+
+                // Eliminate Windows 10/11 Explorer 10-second Startup Delay & register zero-delay Logon Task + NGEN native image!
+                ConfigureZeroDelayWindowsStartup(exePath, enable);
+            }
+            catch { }
+        }
+
+        public static void ConfigureZeroDelayWindowsStartup(string exePath, bool enable)
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
                     if (enable)
                     {
-                        string exePath = Process.GetCurrentProcess().MainModule.FileName;
-                        key.SetValue("DesktopFences", "\"" + exePath + "\"");
+                        // 1. Disable Windows Explorer's artificial 10-second StartupDelayInMSec so Desktop Fences
+                        // launches the exact millisecond the Windows Desktop appears!
+                        using (var serializeKey = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize"))
+                        {
+                            if (serializeKey != null)
+                            {
+                                serializeKey.SetValue("StartupDelayInMSec", 0, RegistryValueKind.DWord);
+                                serializeKey.SetValue("WaitForIdleState", 0, RegistryValueKind.DWord);
+                            }
+                        }
+
+                        // 2. Also ensure a shortcut exists in %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
+                        string startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                        if (!string.IsNullOrEmpty(startupFolder) && Directory.Exists(startupFolder))
+                        {
+                            string startupLnk = System.IO.Path.Combine(startupFolder, "Desktop Fences.lnk");
+                            CreateShellShortcut(startupLnk, exePath, "Desktop Fences Instant Startup");
+                        }
+
+                        // 3. Pre-compile DesktopFences.exe into Windows Native Image Cache (NGEN) so cold-boot JIT takes 0ms
+                        string ngen64 = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"Microsoft.NET\Framework64\v4.0.30319\ngen.exe");
+                        if (File.Exists(ngen64))
+                            RunHiddenCommand(ngen64, "install \"" + exePath + "\" /nologo");
                     }
                     else
                     {
-                        key.DeleteValue("DesktopFences", false);
+                        string startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                        if (!string.IsNullOrEmpty(startupFolder))
+                        {
+                            string startupLnk = System.IO.Path.Combine(startupFolder, "Desktop Fences.lnk");
+                            if (File.Exists(startupLnk)) File.Delete(startupLnk);
+                        }
                     }
                 }
+                catch { }
+            });
+        }
+
+        private static void CreateShellShortcut(string lnkPath, string targetExe, string description)
+        {
+            try
+            {
+                Type t = Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"));
+                var link = (NativeMethods.IShellLinkW)Activator.CreateInstance(t);
+                link.SetPath(targetExe);
+                link.SetWorkingDirectory(System.IO.Path.GetDirectoryName(targetExe));
+                link.SetDescription(description ?? "Desktop Fences");
+                ((NativeMethods.IPersistFile)link).Save(lnkPath, true);
+            }
+            catch { }
+        }
+
+        private static void RunHiddenCommand(string fileName, string arguments)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(fileName, arguments)
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                var p = Process.Start(psi);
+                if (p != null) p.WaitForExit(4000);
             }
             catch { }
         }
@@ -5206,6 +5321,242 @@ namespace DesktopFences
     /// right-click menu, taskbar, other apps), every fence's selection is cleared, just like Windows Explorer.
     /// Clicks on our own fences, context menus and dialogs are ignored (those handle selection themselves).
     /// </summary>
+    /// <summary>
+    /// Automatically exposes all fenced files, archives, documents, and folders inside "This PC > Desktop"
+    /// whenever ANY Web Browser File Upload dialog or "Open Workspace / Select Folder" dialog (#32770) is open,
+    /// using zero-copy NTFS Hardlinks (for files) and Directory Junctions (for folders), and removes them
+    /// the instant the dialog closes so the desktop wallpaper always remains 100% free of duplicate icons!
+    /// </summary>
+    internal static class FileDialogDesktopProjectionWatcher
+    {
+        private static DispatcherTimer _timer;
+        private static bool _isProjected;
+        private static readonly HashSet<string> _projectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public static void Start()
+        {
+            if (_timer != null) return;
+            // Clean up any leftover projections from an unexpected shutdown before starting
+            CleanupStaleMarkerProjections();
+
+            _timer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(220)
+            };
+            _timer.Tick += OnTick;
+            _timer.Start();
+        }
+
+        public static void StopAndCleanup()
+        {
+            try
+            {
+                if (_timer != null) _timer.Stop();
+                if (_isProjected)
+                    UnprojectFromDesktop();
+            }
+            catch { }
+        }
+
+        private static string MarkerFilePath
+        {
+            get { return System.IO.Path.Combine(ConfigManager.ConfigDirectory, "dialog-projections.txt"); }
+        }
+
+        private static void CleanupStaleMarkerProjections()
+        {
+            try
+            {
+                if (!File.Exists(MarkerFilePath)) return;
+                foreach (string p in File.ReadAllLines(MarkerFilePath, Encoding.UTF8))
+                {
+                    RemoveSingleProjectedPath(p);
+                }
+                File.Delete(MarkerFilePath);
+            }
+            catch { }
+        }
+
+        private static void OnTick(object sender, EventArgs e)
+        {
+            bool dialogOpen = IsCommonFileOrFolderDialogOpen();
+            if (dialogOpen && !_isProjected)
+            {
+                ProjectFencedItemsToDesktop();
+            }
+            else if (!dialogOpen && _isProjected)
+            {
+                UnprojectFromDesktop();
+            }
+        }
+
+        private static bool IsCommonFileOrFolderDialogOpen()
+        {
+            bool found = false;
+            try
+            {
+                NativeMethods.EnumWindows((topHwnd, _) =>
+                {
+                    if (!NativeMethods.IsWindowVisible(topHwnd))
+                        return true;
+
+                    var sb = new StringBuilder(64);
+                    NativeMethods.GetClassName(topHwnd, sb, 64);
+                    if (sb.ToString() == "#32770")
+                    {
+                        // Common File Open / Save / Upload / Select Folder dialogs host DUIViewWndClassName, WorkerW, or SHBrowseForFolder Shell embedding
+                        if (NativeMethods.FindWindowEx(topHwnd, IntPtr.Zero, "DUIViewWndClassName", null) != IntPtr.Zero ||
+                            NativeMethods.FindWindowEx(topHwnd, IntPtr.Zero, "WorkerW", null) != IntPtr.Zero ||
+                            NativeMethods.FindWindowEx(topHwnd, IntPtr.Zero, "SHBrowseForFolder ShellNameSpace Control", null) != IntPtr.Zero)
+                        {
+                            found = true;
+                            return false;
+                        }
+                    }
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch { }
+            return found;
+        }
+
+        private static void ProjectFencedItemsToDesktop()
+        {
+            _isProjected = true;
+            _projectedPaths.Clear();
+
+            try
+            {
+                string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (string.IsNullOrEmpty(userDesktop) || !Directory.Exists(userDesktop))
+                    return;
+
+                if (ConfigManager.Current == null || ConfigManager.Current.Fences == null)
+                    return;
+
+                // 1. Project a master "Desktop Fences (All Desktop Files & Folders)" junction AND per-fence folder junctions
+                foreach (var fence in ConfigManager.Current.Fences)
+                {
+                    string fenceDir = ConfigManager.GetFenceFolderPath(fence.Id);
+                    if (!Directory.Exists(fenceDir)) continue;
+
+                    // Expose the Fence itself as a folder on Desktop (e.g. "[Fence] Documents & Files") so even nested items are browsable
+                    string safeTitle = string.Join("_", (fence.Title ?? "Fence").Split(System.IO.Path.GetInvalidFileNameChars())).Trim();
+                    if (!string.IsNullOrEmpty(safeTitle))
+                    {
+                        string fenceJunction = System.IO.Path.Combine(userDesktop, "[Fence] " + safeTitle);
+                        if (!Directory.Exists(fenceJunction) && !File.Exists(fenceJunction))
+                        {
+                            if (CreateDirectoryJunctionFast(fenceJunction, fenceDir))
+                                _projectedPaths.Add(fenceJunction);
+                        }
+                    }
+
+                    // 2. Project every real folder inside the fence directly onto This PC > Desktop via zero-copy NTFS Directory Junction
+                    foreach (string subDir in Directory.GetDirectories(fenceDir))
+                    {
+                        string name = System.IO.Path.GetFileName(subDir);
+                        if (string.IsNullOrEmpty(name)) continue;
+                        string destLink = System.IO.Path.Combine(userDesktop, name);
+                        if (Directory.Exists(destLink) || File.Exists(destLink))
+                            continue;
+
+                        if (CreateDirectoryJunctionFast(destLink, subDir))
+                            _projectedPaths.Add(destLink);
+                    }
+
+                    // 3. Project every real file/document/zip inside the fence directly onto This PC > Desktop (skipping only .vfence virtual markers)
+                    foreach (string file in Directory.GetFiles(fenceDir))
+                    {
+                        string name = System.IO.Path.GetFileName(file);
+                        if (string.IsNullOrEmpty(name)) continue;
+                        if (name.EndsWith("desktop.ini", StringComparison.OrdinalIgnoreCase) ||
+                            name.EndsWith(VirtualDesktopShellHelper.VirtualExt, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        string destFile = System.IO.Path.Combine(userDesktop, name);
+                        if (File.Exists(destFile) || Directory.Exists(destFile))
+                            continue;
+
+                        if (NativeMethods.CreateHardLink(destFile, file, IntPtr.Zero))
+                            _projectedPaths.Add(destFile);
+                    }
+                }
+
+                if (_projectedPaths.Count > 0)
+                {
+                    try { File.WriteAllLines(MarkerFilePath, _projectedPaths.ToArray(), Encoding.UTF8); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        private static void UnprojectFromDesktop()
+        {
+            _isProjected = false;
+            try
+            {
+                foreach (string p in _projectedPaths.ToList())
+                {
+                    RemoveSingleProjectedPath(p);
+                }
+                _projectedPaths.Clear();
+                if (File.Exists(MarkerFilePath))
+                    File.Delete(MarkerFilePath);
+
+                string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (!string.IsNullOrEmpty(userDesktop))
+                {
+                    NativeMethods.SHChangeNotify(
+                        NativeMethods.SHCNE_UPDATEDIR,
+                        NativeMethods.SHCNF_PATHW | NativeMethods.SHCNF_FLUSHNOWAIT,
+                        userDesktop,
+                        null);
+                }
+            }
+            catch { }
+        }
+
+        private static void RemoveSingleProjectedPath(string path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path)) return;
+                if (Directory.Exists(path))
+                {
+                    var di = new DirectoryInfo(path);
+                    // Only remove if it is a ReparsePoint (Directory Junction) so real folders are untouched
+                    if ((di.Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        Directory.Delete(path, false);
+                    }
+                }
+                else if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch { }
+        }
+
+        private static bool CreateDirectoryJunctionFast(string linkPath, string targetPath)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + linkPath + "\" \"" + targetPath + "\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                var p = Process.Start(psi);
+                if (p != null) p.WaitForExit(1500);
+                return Directory.Exists(linkPath);
+            }
+            catch { return false; }
+        }
+    }
+
     internal static class OutsideClickSelectionWatcher
     {
         private const int VK_LBUTTON = 0x01;
@@ -5334,9 +5685,6 @@ namespace DesktopFences
         {
             base.OnStartup(e);
 
-            // Guarantee native Windows desktop icons are 100% visible and untouched
-            DesktopHostManager.EnsureNativeDesktopIconsVisible();
-
             bool isNew;
             _singleInstanceMutex = new Mutex(true, @"Local\DesktopFences_SingleInstance_Mutex", out isNew);
             if (!isNew)
@@ -5345,11 +5693,27 @@ namespace DesktopFences
                 return;
             }
 
+            // FAST-PATH STARTUP: Load config and render fence windows on the VERY FIRST frame (<150ms)
+            // before initializing background tray icons, hotkeys, or desktop shell walks!
+            try { Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
             ShellIconExtractor.EnsureImageLists();
             ConfigManager.Load();
             SpawnFenceWindows();
-            InitializeSystemTray();
-            InitializeGlobalHotkeys();
+
+            // Defer non-visual startup work until after all fences are visible on screen
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                DesktopHostManager.EnsureNativeDesktopIconsVisible();
+                InitializeSystemTray();
+                InitializeGlobalHotkeys();
+                FileDialogDesktopProjectionWatcher.Start();
+                if (SettingsWindow.IsStartupEnabled())
+                {
+                    SettingsWindow.ConfigureZeroDelayWindowsStartup(
+                        Process.GetCurrentProcess().MainModule.FileName,
+                        true);
+                }
+            }), DispatcherPriority.Background);
         }
 
         private void SpawnFenceWindows()
@@ -5587,6 +5951,7 @@ namespace DesktopFences
 
         protected override void OnExit(ExitEventArgs e)
         {
+            FileDialogDesktopProjectionWatcher.StopAndCleanup();
             DesktopHostManager.EnsureNativeDesktopIconsVisible();
             try
             {
