@@ -5700,9 +5700,18 @@ namespace DesktopFences
 
                     var sb = new StringBuilder(64);
                     NativeMethods.GetClassName(topHwnd, sb, 64);
-                    if (sb.ToString() == "#32770")
+                    string cls = sb.ToString();
+
+                    // 1. Standard File Explorer window (CabinetWClass / ExploreWClass) browsing This PC > Desktop
+                    if (cls == "CabinetWClass" || cls == "ExploreWClass")
                     {
-                        // Common File Open / Save / Upload / Select Folder dialogs host DUIViewWndClassName, WorkerW, or SHBrowseForFolder Shell embedding
+                        found = true;
+                        return false;
+                    }
+
+                    // 2. Common File Open / Save / Website Upload / Select Folder dialogs (#32770)
+                    if (cls == "#32770")
+                    {
                         if (NativeMethods.FindWindowEx(topHwnd, IntPtr.Zero, "DUIViewWndClassName", null) != IntPtr.Zero ||
                             NativeMethods.FindWindowEx(topHwnd, IntPtr.Zero, "WorkerW", null) != IntPtr.Zero ||
                             NativeMethods.FindWindowEx(topHwnd, IntPtr.Zero, "SHBrowseForFolder ShellNameSpace Control", null) != IntPtr.Zero)
