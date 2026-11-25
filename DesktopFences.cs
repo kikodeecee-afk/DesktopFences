@@ -43,8 +43,15 @@ namespace DesktopFences
         public const int GWLP_HWNDPARENT = -8;
         public const int WS_EX_TOOLWINDOW = 0x00000080;
         public const int WS_EX_NOACTIVATE = 0x08000000;
+        public const int WS_EX_TRANSPARENT = 0x00000020;
+        public const int WS_EX_LAYERED = 0x00080000;
 
         public const int WM_WINDOWPOSCHANGING = 0x0046;
+        public const int WM_WINDOWPOSCHANGED = 0x0047;
+        public const int WM_ACTIVATE = 0x0006;
+        public const int WM_ACTIVATEAPP = 0x001C;
+        public const int WM_MOUSEACTIVATE = 0x0021;
+        public const int MA_NOACTIVATE = 3;
         public const int WM_SYSCOMMAND = 0x0112;
         public const int WM_HOTKEY = 0x0312;
         public const int SC_MINIMIZE = 0xF020;
@@ -470,21 +477,16 @@ namespace DesktopFences
                 ResolveDesktopHandles(out hostHwnd, out defView, out listView);
 
                 long exStyle = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
-                // Use WS_EX_TOOLWINDOW to hide from Alt+Tab, while omitting WS_EX_NOACTIVATE so fences
-                // properly receive keyboard focus & Shift/Ctrl/Ctrl+A/Delete modifiers when clicked!
-                exStyle = (exStyle | NativeMethods.WS_EX_TOOLWINDOW) & ~((long)NativeMethods.WS_EX_NOACTIVATE);
+                // Use WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE so clicking or dragging an icon inside a fence
+                // NEVER brings the fence window above the user's Web Browser or open apps!
+                exStyle = exStyle | NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_NOACTIVATE;
                 NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, new IntPtr(exStyle));
 
-                // Set Owner (GWLP_HWNDPARENT) to hostHwnd (Progman or WorkerW).
-                // IMPORTANT: Do NOT overwrite WINDOWPOS to HWND_BOTTOM inside WM_WINDOWPOSCHANGING!
-                // Calling SetWindowPos(..., HWND_BOTTOM, ...) outside WM_WINDOWPOSCHANGING lets win32k clamp
-                // the owned fence IMMEDIATELY ABOVE Progman/WorkerW (100% visible on top of wallpaper)
-                // while keeping it behind normal app windows and surviving Win+D!
-                if (hostHwnd != IntPtr.Zero)
-                {
-                    NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWLP_HWNDPARENT, hostHwnd);
-                    UpdateZOrder(hwnd);
-                }
+                // Do NOT set GWLP_HWNDPARENT to Progman/WorkerW — otherwise clicking or dragging from a fence
+                // causes Windows to raise Progman/WorkerW and all owned fences on top of the Web Browser,
+                // making the browser look transparent with fence icons showing through!
+                NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWLP_HWNDPARENT, IntPtr.Zero);
+                UpdateZOrder(hwnd);
 
                 HwndSource source = HwndSource.FromHwnd(hwnd);
                 if (source != null)
@@ -498,10 +500,6 @@ namespace DesktopFences
         public static void UpdateZOrder(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return;
-            IntPtr hostHwnd, defView, listView;
-            ResolveDesktopHandles(out hostHwnd, out defView, out listView);
-            if (!IsPeekModeActive && hostHwnd == IntPtr.Zero)
-                return; // Never send an unowned window to HWND_BOTTOM or it could slip behind Progman
 
             IntPtr targetZ = IsPeekModeActive ? NativeMethods.HWND_TOPMOST : NativeMethods.HWND_BOTTOM;
             NativeMethods.SetWindowPos(
@@ -509,6 +507,23 @@ namespace DesktopFences
                 targetZ,
                 0, 0, 0, 0,
                 NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        }
+
+        public static void PushAllFencesToDesktopBottom()
+        {
+            if (IsPeekModeActive || App.Instance == null || App.Instance.ActiveWindows == null)
+                return;
+
+            foreach (var win in App.Instance.ActiveWindows)
+            {
+                try
+                {
+                    IntPtr h = new WindowInteropHelper(win).Handle;
+                    if (h != IntPtr.Zero)
+                        UpdateZOrder(h);
+                }
+                catch { }
+            }
         }
 
         private static IntPtr DesktopWindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -521,6 +536,25 @@ namespace DesktopFences
                     handled = true;
                     return IntPtr.Zero;
                 }
+            }
+            else if (msg == NativeMethods.WM_WINDOWPOSCHANGING && !IsPeekModeActive && lParam != IntPtr.Zero)
+            {
+                // Clamp fence strictly to HWND_BOTTOM whenever Windows tries to raise its Z-order during click or drag-and-drop!
+                try
+                {
+                    var wp = (NativeMethods.WINDOWPOS)Marshal.PtrToStructure(lParam, typeof(NativeMethods.WINDOWPOS));
+                    if ((wp.flags & NativeMethods.SWP_NOZORDER) == 0 && wp.hwndInsertAfter != NativeMethods.HWND_BOTTOM)
+                    {
+                        wp.hwndInsertAfter = NativeMethods.HWND_BOTTOM;
+                        wp.flags |= NativeMethods.SWP_NOACTIVATE;
+                        Marshal.StructureToPtr(wp, lParam, false);
+                    }
+                }
+                catch { }
+            }
+            else if ((msg == NativeMethods.WM_ACTIVATE || msg == NativeMethods.WM_ACTIVATEAPP) && !IsPeekModeActive)
+            {
+                UpdateZOrder(hwnd);
             }
             return IntPtr.Zero;
         }
@@ -1762,6 +1796,8 @@ namespace DesktopFences
         private ScrollViewer _scrollViewer;
         private Canvas _marqueeOverlayCanvas;
         private Border _marqueeRect;
+        private Border _reorderInsertionIndicator;
+        private int _currentReorderInsertIndex = -1;
         private TextBlock _emptyHintText;
         private TextBlock _badgeText;
         private FileSystemWatcher _fenceFolderWatcher;
@@ -2090,6 +2126,27 @@ namespace DesktopFences
             };
             _marqueeOverlayCanvas.Children.Add(_marqueeRect);
 
+            // Windows Explorer-style live insertion bar for drag-and-drop manual icon sorting
+            _reorderInsertionIndicator = new Border
+            {
+                Width = 4,
+                Height = 68,
+                CornerRadius = new CornerRadius(2),
+                Background = new SolidColorBrush(Color.FromArgb(245, 96, 165, 250)),
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(0.8),
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false,
+                Effect = new DropShadowEffect
+                {
+                    Color = Color.FromRgb(37, 99, 235),
+                    BlurRadius = 8,
+                    ShadowDepth = 0,
+                    Opacity = 0.95
+                }
+            };
+            _marqueeOverlayCanvas.Children.Add(_reorderInsertionIndicator);
+
             _bodyGrid.Children.Add(_emptyHintText);
             _bodyGrid.Children.Add(_scrollViewer);
             _bodyGrid.Children.Add(_marqueeOverlayCanvas);
@@ -2309,8 +2366,9 @@ namespace DesktopFences
             if (IsDescendantOfScrollBar(e.OriginalSource as DependencyObject))
                 return;
 
-            Activate();
+            // Keep fence strictly pinned to the desktop layer (HWND_BOTTOM) and never activate over open browsers/apps!
             Focus();
+            DesktopHostManager.UpdateZOrder(new WindowInteropHelper(this).Handle);
 
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
             bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
@@ -2580,9 +2638,62 @@ namespace DesktopFences
 
                     if (dragPaths.Length > 0)
                     {
-                        var data = new DataObject(DataFormats.FileDrop, dragPaths);
+                        // Order dragPaths by their visual sequence in the fence
+                        string[] orderedDragPaths = _currentOrderedPaths
+                            .Where(p => dragPaths.Contains(p, StringComparer.OrdinalIgnoreCase))
+                            .ToArray();
+                        if (orderedDragPaths.Length == 0)
+                            orderedDragPaths = dragPaths;
+
+                        string primaryDragPath = (!string.IsNullOrEmpty(_pressedTilePath) && orderedDragPaths.Contains(_pressedTilePath, StringComparer.OrdinalIgnoreCase))
+                            ? _pressedTilePath
+                            : orderedDragPaths[0];
+
+                        // Dim the source tiles while being dragged (just like Windows Explorer / Desktop)
+                        foreach (string dp in orderedDragPaths)
+                        {
+                            Border b;
+                            if (_tileBorders.TryGetValue(dp, out b))
+                                b.Opacity = 0.38;
+                        }
+
+                        // Force all fences to stay strictly at HWND_BOTTOM behind any open Web Browser or application
+                        DesktopHostManager.PushAllFencesToDesktopBottom();
+
+                        var data = new DataObject(DataFormats.FileDrop, orderedDragPaths);
+                        data.SetData("DesktopFences.ReorderSourceFenceId", Model.Id);
+                        data.SetData("DesktopFences.ReorderPrimaryPath", primaryDragPath);
                         data.SetData("Preferred DropEffect", new MemoryStream(BitConverter.GetBytes((int)DragDropEffects.Move)));
-                        DragDrop.DoDragDrop(_bodyGrid, data, DragDropEffects.Move);
+
+                        var primaryItem = ShellIconExtractor.CreateItem(primaryDragPath);
+                        GiveFeedbackEventHandler feedbackHandler = (s, fbArgs) =>
+                        {
+                            fbArgs.UseDefaultCursors = true;
+                            fbArgs.Handled = false;
+                            DragGhostCursorAdorner.UpdatePositionAndEffect(fbArgs.Effects);
+                        };
+                        QueryContinueDragEventHandler queryHandler = (s, qArgs) =>
+                        {
+                            DragGhostCursorAdorner.UpdatePosition();
+                            DesktopHostManager.PushAllFencesToDesktopBottom();
+                        };
+
+                        _bodyGrid.GiveFeedback += feedbackHandler;
+                        _bodyGrid.QueryContinueDrag += queryHandler;
+                        try
+                        {
+                            DragGhostCursorAdorner.Show(primaryItem, orderedDragPaths.Length);
+                            DragDrop.DoDragDrop(_bodyGrid, data, DragDropEffects.Move | DragDropEffects.Copy | DragDropEffects.Link);
+                        }
+                        finally
+                        {
+                            _bodyGrid.GiveFeedback -= feedbackHandler;
+                            _bodyGrid.QueryContinueDrag -= queryHandler;
+                            DragGhostCursorAdorner.HideGhost();
+                            HideReorderInsertionIndicator();
+                            DesktopHostManager.PushAllFencesToDesktopBottom();
+                        }
+
                         // If a virtual item (.vfence) was dropped onto the native Windows Desktop, restore its real CLSID icon!
                         FenceFileTransferService.SweepDroppedVirtualFilesOnDesktop();
                         PopulateIcons();
@@ -3270,9 +3381,94 @@ namespace DesktopFences
 
             if (_dragHasFileDrop)
             {
+                UpdateReorderInsertionIndicator(e);
                 e.Effects = _activeDropEffect;
                 e.Handled = true;
             }
+        }
+
+        private void HideReorderInsertionIndicator()
+        {
+            _currentReorderInsertIndex = -1;
+            if (_reorderInsertionIndicator != null)
+                _reorderInsertionIndicator.Visibility = Visibility.Collapsed;
+        }
+
+        private int ComputeDropInsertionIndex(DragEventArgs e, out Point indicatorCanvasPos, out double indicatorHeight)
+        {
+            indicatorCanvasPos = new Point(14, 14);
+            indicatorHeight = 68;
+
+            if (_currentOrderedPaths == null || _currentOrderedPaths.Count == 0 || _marqueeOverlayCanvas == null)
+                return 0;
+
+            Point ptInCanvas = e.GetPosition(_marqueeOverlayCanvas);
+
+            // Find the closest tile to the drop cursor (row-aware in WrapPanel)
+            int bestIndex = _currentOrderedPaths.Count;
+            double bestDist = double.MaxValue;
+            Rect bestRect = Rect.Empty;
+            bool insertAfterBest = false;
+
+            for (int i = 0; i < _currentOrderedPaths.Count; i++)
+            {
+                string path = _currentOrderedPaths[i];
+                Border tile;
+                if (!_tileBorders.TryGetValue(path, out tile) || !tile.IsVisible)
+                    continue;
+
+                try
+                {
+                    Point tl = tile.TranslatePoint(new Point(0, 0), _marqueeOverlayCanvas);
+                    Rect r = new Rect(tl.X, tl.Y, tile.ActualWidth, tile.ActualHeight);
+
+                    // Weight vertical distance more strongly so we snap to the cursor's current row in WrapPanel
+                    double cy = r.Top + r.Height * 0.5;
+                    double cx = r.Left + r.Width * 0.5;
+                    double dy = Math.Abs(ptInCanvas.Y - cy);
+                    double dx = Math.Abs(ptInCanvas.X - cx);
+                    double dist = dy * 3.2 + dx;
+
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        bestIndex = i;
+                        bestRect = r;
+                        insertAfterBest = ptInCanvas.X > cx;
+                    }
+                }
+                catch { }
+            }
+
+            if (bestRect.IsEmpty)
+                return _currentOrderedPaths.Count;
+
+            indicatorHeight = Math.Max(44, bestRect.Height - 6);
+            double barX = insertAfterBest
+                ? Math.Min(_marqueeOverlayCanvas.ActualWidth - 6, bestRect.Right + 2)
+                : Math.Max(2, bestRect.Left - 6);
+            double barY = bestRect.Top + 3;
+            indicatorCanvasPos = new Point(barX, barY);
+
+            return insertAfterBest ? (bestIndex + 1) : bestIndex;
+        }
+
+        private void UpdateReorderInsertionIndicator(DragEventArgs e)
+        {
+            if (_reorderInsertionIndicator == null)
+                return;
+
+            DragGhostCursorAdorner.UpdatePosition();
+
+            Point barPos;
+            double barH;
+            _currentReorderInsertIndex = ComputeDropInsertionIndex(e, out barPos, out barH);
+
+            _reorderInsertionIndicator.Height = barH;
+            Canvas.SetLeft(_reorderInsertionIndicator, barPos.X);
+            Canvas.SetTop(_reorderInsertionIndicator, barPos.Y);
+            if (_reorderInsertionIndicator.Visibility != Visibility.Visible)
+                _reorderInsertionIndicator.Visibility = Visibility.Visible;
         }
 
         private void OnFencePreviewDragLeave(object sender, DragEventArgs e)
@@ -3286,6 +3482,7 @@ namespace DesktopFences
                     _dragLeaveDebounceTimer.Stop();
                     _isDragOverActive = false;
                     _dragHasFileDrop = false;
+                    HideReorderInsertionIndicator();
                     ApplyTransparentHoverChromeState(animate: true);
                 };
             }
@@ -3297,6 +3494,11 @@ namespace DesktopFences
         {
             if (_dragLeaveDebounceTimer != null)
                 _dragLeaveDebounceTimer.Stop();
+
+            Point dummyPos;
+            double dummyH;
+            int targetInsertIndex = ComputeDropInsertionIndex(e, out dummyPos, out dummyH);
+            HideReorderInsertionIndicator();
 
             _isDragOverActive = false;
             _dragHasFileDrop = false;
@@ -3332,14 +3534,71 @@ namespace DesktopFences
                 return;
             }
 
+            // Check if this is an internal icon drag-reorder within the SAME fence!
+            string thisFenceDir = ConfigManager.GetFenceFolderPath(Model.Id);
+            if (hasRealFiles && !hasVirtualItems &&
+                droppedFiles.All(f => !string.IsNullOrEmpty(f) &&
+                    string.Equals(System.IO.Path.GetDirectoryName(f), thisFenceDir, StringComparison.OrdinalIgnoreCase)))
+            {
+                ReorderIconsInThisFence(droppedFiles, targetInsertIndex);
+                ApplyTransparentHoverChromeState(animate: true);
+                return;
+            }
+
             string[] batchCopy = hasRealFiles ? droppedFiles.ToArray() : new string[0];
             var virtualCopy = hasVirtualItems ? new List<VirtualDesktopItemInfo>(virtualDrops) : new List<VirtualDesktopItemInfo>();
-            Dispatcher.BeginInvoke(new Action(() => ProcessDroppedFilesFast(batchCopy, virtualCopy)), DispatcherPriority.Render);
+            int insertIdxCopy = targetInsertIndex;
+            Dispatcher.BeginInvoke(new Action(() => ProcessDroppedFilesFast(batchCopy, virtualCopy, insertIdxCopy)), DispatcherPriority.Render);
         }
 
-        private void ProcessDroppedFilesFast(string[] droppedFiles, List<VirtualDesktopItemInfo> virtualDrops)
+        private void ReorderIconsInThisFence(string[] draggedPaths, int targetInsertIndex)
+        {
+            if (draggedPaths == null || draggedPaths.Length == 0)
+                return;
+
+            // Ensure current visual order is captured in Model.OrderedFileNames
+            var currentNames = _currentOrderedPaths
+                .Select(System.IO.Path.GetFileName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+
+            var draggedNames = draggedPaths
+                .Select(System.IO.Path.GetFileName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+
+            if (draggedNames.Count == 0)
+                return;
+
+            // Count how many dragged items were strictly BEFORE targetInsertIndex so index adjusts cleanly after removal
+            int clampedTarget = Math.Max(0, Math.Min(targetInsertIndex, currentNames.Count));
+            int removedBeforeTarget = 0;
+            for (int i = 0; i < clampedTarget; i++)
+            {
+                if (draggedNames.Contains(currentNames[i], StringComparer.OrdinalIgnoreCase))
+                    removedBeforeTarget++;
+            }
+
+            currentNames.RemoveAll(n => draggedNames.Contains(n, StringComparer.OrdinalIgnoreCase));
+            int finalInsertIdx = Math.Max(0, Math.Min(clampedTarget - removedBeforeTarget, currentNames.Count));
+            currentNames.InsertRange(finalInsertIdx, draggedNames);
+
+            // Switch to Manual Order ("None") if the user manually dragged icons to reorder them, or keep "None" updated
+            Model.OrderedFileNames = currentNames;
+            if (!string.Equals(Model.SortBy, "None", StringComparison.OrdinalIgnoreCase))
+            {
+                Model.SortBy = "None";
+                Model.SortDescending = false;
+            }
+
+            PopulateIcons();
+            ConfigManager.SaveAsync();
+        }
+
+        private void ProcessDroppedFilesFast(string[] droppedFiles, List<VirtualDesktopItemInfo> virtualDrops, int targetInsertIndex = -1)
         {
             var affectedSourceFences = new HashSet<FenceWindow>();
+            var newlyInsertedFileNames = new List<string>();
             SetWatcherEnabled(false);
             try
             {
@@ -3355,7 +3614,12 @@ namespace DesktopFences
                     foreach (var vItem in virtualDrops)
                     {
                         if (FenceFileTransferService.MoveVirtualItemIntoFence(vItem, Model))
+                        {
                             anyMoved = true;
+                            string lastAdded = Model.OrderedFileNames.LastOrDefault();
+                            if (!string.IsNullOrEmpty(lastAdded))
+                                newlyInsertedFileNames.Add(lastAdded);
+                        }
                     }
                 }
 
@@ -3374,11 +3638,26 @@ namespace DesktopFences
                     }
 
                     if (FenceFileTransferService.MoveItemIntoFence(file, Model))
+                    {
                         anyMoved = true;
+                        string lastAdded = Model.OrderedFileNames.LastOrDefault();
+                        if (!string.IsNullOrEmpty(lastAdded))
+                            newlyInsertedFileNames.Add(lastAdded);
+                    }
                 }
 
                 if (anyMoved)
                 {
+                    // If Auto-Sort is disabled ("None") and the user dropped at a specific slot, place them right there!
+                    if (targetInsertIndex >= 0 &&
+                        newlyInsertedFileNames.Count > 0 &&
+                        string.Equals(string.IsNullOrWhiteSpace(Model.SortBy) ? "None" : Model.SortBy, "None", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Model.OrderedFileNames.RemoveAll(n => newlyInsertedFileNames.Contains(n, StringComparer.OrdinalIgnoreCase));
+                        int ins = Math.Max(0, Math.Min(targetInsertIndex, Model.OrderedFileNames.Count));
+                        Model.OrderedFileNames.InsertRange(ins, newlyInsertedFileNames);
+                    }
+
                     string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                     try
                     {
@@ -4698,6 +4977,227 @@ namespace DesktopFences
     #endregion
 
     #region 7. Main Application Controller (Untouched Native Desktop, Tray & Hotkeys)
+
+    /// <summary>
+    /// Windows OS Explorer-style floating translucent icon drag ghost & action badge that follows the cursor
+    /// smoothly during drag-and-drop sorting/moving without intercepting mouse hit-testing (WS_EX_TRANSPARENT).
+    /// </summary>
+    internal sealed class DragGhostCursorAdorner : Window
+    {
+        private static DragGhostCursorAdorner _instance;
+        private readonly Image _iconImg;
+        private readonly TextBlock _labelBlock;
+        private readonly Border _countBadge;
+        private readonly TextBlock _countText;
+        private readonly Border _actionPill;
+        private readonly TextBlock _actionText;
+
+        private DragGhostCursorAdorner()
+        {
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.NoResize;
+            AllowsTransparency = true;
+            Background = Brushes.Transparent;
+            ShowInTaskbar = false;
+            ShowActivated = false;
+            Topmost = true;
+            IsHitTestVisible = false;
+            Focusable = false;
+            SizeToContent = SizeToContent.WidthAndHeight;
+            FontFamily = new FontFamily("Poppins, Segoe UI Variable Display, Segoe UI");
+
+            var outerCard = new Border
+            {
+                CornerRadius = new CornerRadius(10),
+                Background = new SolidColorBrush(Color.FromArgb(190, 15, 23, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(225, 96, 165, 250)),
+                BorderThickness = new Thickness(1.4),
+                Padding = new Thickness(10, 8, 10, 7),
+                Margin = new Thickness(6),
+                Opacity = 0.90,
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 12,
+                    ShadowDepth = 3,
+                    Opacity = 0.65
+                }
+            };
+
+            var stack = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+
+            var iconGrid = new Grid
+            {
+                Width = 46,
+                Height = 46,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+
+            _iconImg = new Image
+            {
+                Width = 42,
+                Height = 42,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            RenderOptions.SetBitmapScalingMode(_iconImg, BitmapScalingMode.HighQuality);
+            iconGrid.Children.Add(_iconImg);
+
+            _countText = new TextBlock
+            {
+                Text = "2",
+                FontSize = 10,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _countBadge = new Border
+            {
+                MinWidth = 18,
+                Height = 18,
+                Padding = new Thickness(4, 0, 4, 0),
+                CornerRadius = new CornerRadius(9),
+                Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(1.2),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Visibility = Visibility.Collapsed,
+                Child = _countText
+            };
+            iconGrid.Children.Add(_countBadge);
+            stack.Children.Add(iconGrid);
+
+            _labelBlock = new TextBlock
+            {
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                TextAlignment = TextAlignment.Center,
+                MaxWidth = 115,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 3, 0, 0)
+            };
+            stack.Children.Add(_labelBlock);
+
+            _actionText = new TextBlock
+            {
+                Text = "➔ Move",
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(191, 219, 254)),
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            _actionPill = new Border
+            {
+                CornerRadius = new CornerRadius(5),
+                Background = new SolidColorBrush(Color.FromArgb(145, 30, 58, 138)),
+                Padding = new Thickness(6, 1, 6, 1),
+                Margin = new Thickness(0, 4, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Child = _actionText
+            };
+            stack.Children.Add(_actionPill);
+
+            outerCard.Child = stack;
+            Content = outerCard;
+
+            SourceInitialized += (_, __) =>
+            {
+                try
+                {
+                    IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                    long ex = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
+                    ex |= NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_NOACTIVATE | NativeMethods.WS_EX_TRANSPARENT | NativeMethods.WS_EX_LAYERED;
+                    NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, new IntPtr(ex));
+                }
+                catch { }
+            };
+        }
+
+        public static void Show(DesktopIconItem item, int count)
+        {
+            try
+            {
+                if (_instance == null)
+                    _instance = new DragGhostCursorAdorner();
+
+                _instance._iconImg.Source = item != null ? item.IconSource : null;
+                _instance._labelBlock.Text = item != null ? item.DisplayName : "Item";
+
+                if (count > 1)
+                {
+                    _instance._countText.Text = count.ToString();
+                    _instance._countBadge.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    _instance._countBadge.Visibility = Visibility.Collapsed;
+                }
+
+                _instance._actionText.Text = "➔ Move / Sort";
+                UpdatePosition();
+                if (!_instance.IsVisible)
+                    _instance.Show();
+            }
+            catch { }
+        }
+
+        public static void UpdatePositionAndEffect(DragDropEffects effects)
+        {
+            if (_instance == null) return;
+            try
+            {
+                if ((effects & DragDropEffects.Move) != 0)
+                    _instance._actionText.Text = "➔ Move / Reorder";
+                else if ((effects & DragDropEffects.Copy) != 0)
+                    _instance._actionText.Text = "＋ Copy";
+                else if ((effects & DragDropEffects.Link) != 0)
+                    _instance._actionText.Text = "🔗 Link";
+                UpdatePosition();
+            }
+            catch { }
+        }
+
+        public static void UpdatePosition()
+        {
+            if (_instance == null) return;
+            try
+            {
+                NativeMethods.POINT pt;
+                if (!NativeMethods.GetCursorPos(out pt)) return;
+
+                double dpiX = 1.0, dpiY = 1.0;
+                var src = PresentationSource.FromVisual(_instance);
+                if (src != null && src.CompositionTarget != null)
+                {
+                    dpiX = src.CompositionTarget.TransformToDevice.M11;
+                    dpiY = src.CompositionTarget.TransformToDevice.M22;
+                }
+
+                // Offset slightly below-right of the hardware pointer just like Windows Explorer drag preview
+                _instance.Left = (pt.X / dpiX) + 14;
+                _instance.Top = (pt.Y / dpiY) + 14;
+            }
+            catch { }
+        }
+
+        public static void HideGhost()
+        {
+            try
+            {
+                if (_instance != null && _instance.IsVisible)
+                    _instance.Hide();
+            }
+            catch { }
+        }
+    }
 
     /// <summary>
     /// Bug Fix: selected icons stayed highlighted after clicking the desktop / refreshing outside the fence.
