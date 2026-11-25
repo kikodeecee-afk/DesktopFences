@@ -1236,9 +1236,216 @@ namespace DesktopFences
             catch { }
         }
         /// <summary>
+        /// Checks if a file is an active in-progress browser download (.crdownload, .part, .opdownload, .tmp)
+        /// or currently locked by Chrome/Edge/OneDrive while downloading.
+        /// </summary>
+        private static bool IsActiveBrowserDownloadOrLocked(string fullPath, out string reason)
+        {
+            reason = null;
+            try
+            {
+                string ext = System.IO.Path.GetExtension(fullPath) ?? "";
+                if (string.Equals(ext, ".crdownload", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(ext, ".part", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(ext, ".opdownload", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(ext, ".download", StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = "This file is still actively downloading in your web browser (" + ext + "). Please wait a moment for the download to finish before moving it.";
+                    return true;
+                }
+
+                if (File.Exists(fullPath))
+                {
+                    // Check if a matching .crdownload / .part file exists next to it
+                    if (File.Exists(fullPath + ".crdownload") || File.Exists(fullPath + ".part"))
+                    {
+                        reason = "This file is still being written by your web browser download. Please wait for the download to complete.";
+                        return true;
+                    }
+
+                    // Briefly test if the file is exclusively locked by a browser download or build process (retry up to 600ms)
+                    for (int attempt = 0; attempt < 4; attempt++)
+                    {
+                        try
+                        {
+                            using (new FileStream(fullPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                            {
+                                return false; // Not locked!
+                            }
+                        }
+                        catch (IOException)
+                        {
+                            if (attempt < 3)
+                                Thread.Sleep(150);
+                        }
+                        catch
+                        {
+                            return false;
+                        }
+                    }
+                    reason = "This file is currently in use or still downloading. Please wait for the download or build to finish.";
+                    return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// Creates a persistent Hidden NTFS Directory Junction on %USERPROFILE%\Desktop pointing to a fenced folder.
+        /// Because the root junction is marked Hidden, it does NOT draw a duplicate icon on the native Desktop wallpaper,
+        /// while Antigravity, VS Code, Node.js, OneDrive, and build scripts continue accessing
+        /// C:\Users\...\Desktop\<FolderName>\... with 100% live two-way data sync!
+        /// </summary>
+        public static void EnsureHiddenDesktopFolderJunction(string desktopLinkPath, string targetFencedFolderPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(desktopLinkPath) || string.IsNullOrEmpty(targetFencedFolderPath))
+                    return;
+                if (!Directory.Exists(targetFencedFolderPath))
+                    return;
+
+                if (Directory.Exists(desktopLinkPath))
+                {
+                    var existingDi = new DirectoryInfo(desktopLinkPath);
+                    if ((existingDi.Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        // Ensure Hidden attribute is set on the junction itself so wallpaper stays clean
+                        if ((existingDi.Attributes & FileAttributes.Hidden) == 0)
+                            existingDi.Attributes |= FileAttributes.Hidden;
+                        return;
+                    }
+                    return; // Real non-junction directory exists at desktopLinkPath; never overwrite
+                }
+                if (File.Exists(desktopLinkPath))
+                    return;
+
+                var psi = new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + desktopLinkPath + "\" \"" + targetFencedFolderPath + "\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                var p = Process.Start(psi);
+                if (p != null) p.WaitForExit(1500);
+
+                if (Directory.Exists(desktopLinkPath))
+                {
+                    var di = new DirectoryInfo(desktopLinkPath);
+                    di.Attributes |= FileAttributes.Hidden;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Creates a persistent Hidden NTFS Hardlink on %USERPROFILE%\Desktop pointing to a fenced file/archive.
+        /// Both the Desktop path and the Fence path share the exact same underlying NTFS disk data in real time!
+        /// </summary>
+        public static void EnsureHiddenDesktopFileHardLink(string desktopLinkPath, string targetFencedFilePath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(desktopLinkPath) || string.IsNullOrEmpty(targetFencedFilePath))
+                    return;
+                if (!File.Exists(targetFencedFilePath))
+                    return;
+
+                string name = System.IO.Path.GetFileName(targetFencedFilePath);
+                if (string.IsNullOrEmpty(name) ||
+                    name.EndsWith("desktop.ini", StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(VirtualDesktopShellHelper.VirtualExt, StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
+                    name.EndsWith(".url", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                if (File.Exists(desktopLinkPath))
+                {
+                    var existingFi = new FileInfo(desktopLinkPath);
+                    if ((existingFi.Attributes & FileAttributes.Hidden) == 0)
+                        existingFi.Attributes |= FileAttributes.Hidden;
+                    return;
+                }
+                if (Directory.Exists(desktopLinkPath))
+                    return;
+
+                if (NativeMethods.CreateHardLink(desktopLinkPath, targetFencedFilePath, IntPtr.Zero))
+                {
+                    var fi = new FileInfo(desktopLinkPath);
+                    fi.Attributes |= FileAttributes.Hidden;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Ensures every fenced folder and real document/archive across all fences has its persistent
+        /// Hidden NTFS Directory Junction or Hardlink on %USERPROFILE%\Desktop so active IDE workspaces
+        /// (Antigravity / VS Code / terminals / OneDrive) never lose sync!
+        /// </summary>
+        public static void SyncAllFencedFoldersToDesktopJunctions()
+        {
+            try
+            {
+                string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (string.IsNullOrEmpty(userDesktop) || !Directory.Exists(userDesktop))
+                    return;
+                if (ConfigManager.Current == null || ConfigManager.Current.Fences == null)
+                    return;
+
+                var activeFencedFolderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var fence in ConfigManager.Current.Fences)
+                {
+                    string fenceDir = ConfigManager.GetFenceFolderPath(fence.Id);
+                    if (!Directory.Exists(fenceDir)) continue;
+
+                    foreach (string subDir in Directory.GetDirectories(fenceDir))
+                    {
+                        string folderName = System.IO.Path.GetFileName(subDir);
+                        if (string.IsNullOrEmpty(folderName)) continue;
+
+                        activeFencedFolderNames.Add(folderName);
+                        string desktopLink = System.IO.Path.Combine(userDesktop, folderName);
+                        EnsureHiddenDesktopFolderJunction(desktopLink, subDir);
+                    }
+
+                    foreach (string file in Directory.GetFiles(fenceDir))
+                    {
+                        string fileName = System.IO.Path.GetFileName(file);
+                        if (string.IsNullOrEmpty(fileName)) continue;
+                        string desktopFileLink = System.IO.Path.Combine(userDesktop, fileName);
+                        EnsureHiddenDesktopFileHardLink(desktopFileLink, file);
+                    }
+                }
+
+                // Clean up any stale Desktop junctions whose target fenced folder was deleted or renamed
+                foreach (string d in Directory.GetDirectories(userDesktop))
+                {
+                    try
+                    {
+                        var di = new DirectoryInfo(d);
+                        if ((di.Attributes & FileAttributes.ReparsePoint) != 0)
+                        {
+                            string name = di.Name;
+                            if (!name.StartsWith("[Fence] ", StringComparison.OrdinalIgnoreCase) &&
+                                !activeFencedFolderNames.Contains(name))
+                            {
+                                Directory.Delete(d, false);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
         /// Moves a file or directory safely into a Fence's managed folder on disk.
-        /// Because it is MOVED from %USERPROFILE%\Desktop into the Fence folder,
-        /// Windows Explorer removes it from the native desktop immediately (0 duplicates).
+        /// For directories, immediately establishes a Hidden NTFS Directory Junction at the original
+        /// Desktop path so Antigravity, VS Code, OneDrive, and running builds experience zero path interruption!
         /// </summary>
         public static bool MoveItemIntoFence(string sourcePath, FenceModel targetFence)
         {
@@ -1252,6 +1459,39 @@ namespace DesktopFences
                 string sourceDir = System.IO.Path.GetDirectoryName(fullSource);
                 if (string.Equals(sourceDir, targetDir, StringComparison.OrdinalIgnoreCase))
                     return false; // Already in this fence
+
+                // If the user dragged a Desktop Junction that already points to a fenced folder, resolve the real fenced folder
+                if (Directory.Exists(fullSource))
+                {
+                    var srcDi = new DirectoryInfo(fullSource);
+                    if ((srcDi.Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        // Check if a fence already owns a folder with this name
+                        string jName = System.IO.Path.GetFileName(fullSource);
+                        foreach (var f in ConfigManager.Current.Fences)
+                        {
+                            string candidate = System.IO.Path.Combine(ConfigManager.GetFenceFolderPath(f.Id), jName);
+                            if (Directory.Exists(candidate))
+                            {
+                                if (string.Equals(f.Id, targetFence.Id, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                // Remove junction temporarily so we can move between fences and re-link
+                                try { Directory.Delete(fullSource, false); } catch { }
+                                fullSource = candidate;
+                                sourceDir = System.IO.Path.GetDirectoryName(fullSource);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Guard against moving an active in-progress browser download (.crdownload / locked stream)
+                string lockReason;
+                if (File.Exists(fullSource) && IsActiveBrowserDownloadOrLocked(fullSource, out lockReason))
+                {
+                    MessageBox.Show(lockReason, "Download in Progress — Desktop Fences", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return false;
+                }
 
                 string publicDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
                 if (!string.IsNullOrEmpty(publicDesktop) &&
@@ -1284,6 +1524,18 @@ namespace DesktopFences
                 else
                     File.Move(fullSource, destPath);
 
+                // If a folder or real document/archive was moved into a fence, immediately create a Hidden NTFS Junction / Hardlink
+                // on Desktop so Antigravity / VS Code / OneDrive / terminal builds referencing C:\Users\...\Desktop\<Item> NEVER break!
+                string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (!string.IsNullOrEmpty(userDesktop) && Directory.Exists(userDesktop))
+                {
+                    string desktopLinkPath = System.IO.Path.Combine(userDesktop, System.IO.Path.GetFileName(destPath));
+                    if (isDir)
+                        EnsureHiddenDesktopFolderJunction(desktopLinkPath, destPath);
+                    else
+                        EnsureHiddenDesktopFileHardLink(desktopLinkPath, destPath);
+                }
+
                 // Immediately notify Windows Explorer so the icon vanishes from the native Desktop in <16ms!
                 try
                 {
@@ -1310,6 +1562,7 @@ namespace DesktopFences
 
         /// <summary>
         /// Moves a single fenced item safely back to %USERPROFILE%\Desktop with conflict-safe naming.
+        /// Removes any temporary Hidden NTFS Directory Junction or Hardlink first so the real folder/file takes its place cleanly.
         /// </summary>
         public static bool RestoreItemToUserDesktop(string fencedItemPath)
         {
@@ -1331,15 +1584,60 @@ namespace DesktopFences
 
                 string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 string fileName = System.IO.Path.GetFileName(fencedItemPath);
+                string existingDesktopCandidate = System.IO.Path.Combine(userDesktop, fileName);
+
+                // If a Hidden NTFS Directory Junction or Hardlink exists on Desktop for this fenced item, remove it first
+                // so the real folder/file is restored to its exact original name without "(2)"!
+                if (Directory.Exists(existingDesktopCandidate))
+                {
+                    try
+                    {
+                        var di = new DirectoryInfo(existingDesktopCandidate);
+                        if ((di.Attributes & FileAttributes.ReparsePoint) != 0)
+                        {
+                            Directory.Delete(existingDesktopCandidate, false);
+                        }
+                    }
+                    catch { }
+                }
+                else if (File.Exists(existingDesktopCandidate))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(existingDesktopCandidate);
+                        if ((fi.Attributes & FileAttributes.Hidden) != 0)
+                        {
+                            File.Delete(existingDesktopCandidate);
+                        }
+                    }
+                    catch { }
+                }
+
                 string destPath = GetConflictSafeDestination(userDesktop, fileName);
                 bool isDir = Directory.Exists(fencedItemPath);
 
                 ShellIconExtractor.WarmAndTransferCache(fencedItemPath, destPath);
 
                 if (isDir)
+                {
                     Directory.Move(fencedItemPath, destPath);
+                    try
+                    {
+                        var restoredDi = new DirectoryInfo(destPath);
+                        restoredDi.Attributes &= ~FileAttributes.Hidden;
+                    }
+                    catch { }
+                }
                 else
+                {
                     File.Move(fencedItemPath, destPath);
+                    try
+                    {
+                        var restoredFi = new FileInfo(destPath);
+                        restoredFi.Attributes &= ~FileAttributes.Hidden;
+                    }
+                    catch { }
+                }
 
                 try
                 {
@@ -5453,12 +5751,27 @@ namespace DesktopFences
                     }
 
                     // 2. Project every real folder inside the fence directly onto This PC > Desktop via zero-copy NTFS Directory Junction
+                    // If a persistent Hidden junction already exists on Desktop, temporarily clear its Hidden attribute while the dialog is open!
                     foreach (string subDir in Directory.GetDirectories(fenceDir))
                     {
                         string name = System.IO.Path.GetFileName(subDir);
                         if (string.IsNullOrEmpty(name)) continue;
                         string destLink = System.IO.Path.Combine(userDesktop, name);
-                        if (Directory.Exists(destLink) || File.Exists(destLink))
+                        if (Directory.Exists(destLink))
+                        {
+                            try
+                            {
+                                var di = new DirectoryInfo(destLink);
+                                if ((di.Attributes & FileAttributes.ReparsePoint) != 0)
+                                {
+                                    di.Attributes &= ~FileAttributes.Hidden;
+                                    _projectedPaths.Add(destLink);
+                                }
+                            }
+                            catch { }
+                            continue;
+                        }
+                        if (File.Exists(destLink))
                             continue;
 
                         if (CreateDirectoryJunctionFast(destLink, subDir))
@@ -5475,7 +5788,21 @@ namespace DesktopFences
                             continue;
 
                         string destFile = System.IO.Path.Combine(userDesktop, name);
-                        if (File.Exists(destFile) || Directory.Exists(destFile))
+                        if (File.Exists(destFile))
+                        {
+                            try
+                            {
+                                var fi = new FileInfo(destFile);
+                                if ((fi.Attributes & FileAttributes.Hidden) != 0)
+                                {
+                                    fi.Attributes &= ~FileAttributes.Hidden;
+                                    _projectedPaths.Add(destFile);
+                                }
+                            }
+                            catch { }
+                            continue;
+                        }
+                        if (Directory.Exists(destFile))
                             continue;
 
                         if (NativeMethods.CreateHardLink(destFile, file, IntPtr.Zero))
@@ -5525,15 +5852,35 @@ namespace DesktopFences
                 if (Directory.Exists(path))
                 {
                     var di = new DirectoryInfo(path);
-                    // Only remove if it is a ReparsePoint (Directory Junction) so real folders are untouched
                     if ((di.Attributes & FileAttributes.ReparsePoint) != 0)
                     {
-                        Directory.Delete(path, false);
+                        string name = di.Name;
+                        if (name.StartsWith("[Fence] ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Directory.Delete(path, false);
+                        }
+                        else
+                        {
+                            // Keep the persistent Desktop Folder Junction alive for Antigravity/VS Code two-way data sync,
+                            // and simply re-apply Hidden so it does not show a duplicate icon on the desktop wallpaper!
+                            di.Attributes |= FileAttributes.Hidden;
+                        }
                     }
                 }
                 else if (File.Exists(path))
                 {
-                    File.Delete(path);
+                    string name = System.IO.Path.GetFileName(path);
+                    if (name != null && (name.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".url", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        File.Delete(path);
+                    }
+                    else
+                    {
+                        // Keep persistent hardlinked files (.zip, .pdf, documents) in sync at C:\Users\...\Desktop\<File>
+                        // and re-apply Hidden so the desktop wallpaper stays 100% clean!
+                        var fi = new FileInfo(path);
+                        fi.Attributes |= FileAttributes.Hidden;
+                    }
                 }
             }
             catch { }
@@ -5704,6 +6051,7 @@ namespace DesktopFences
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 DesktopHostManager.EnsureNativeDesktopIconsVisible();
+                FenceFileTransferService.SyncAllFencedFoldersToDesktopJunctions();
                 InitializeSystemTray();
                 InitializeGlobalHotkeys();
                 FileDialogDesktopProjectionWatcher.Start();
