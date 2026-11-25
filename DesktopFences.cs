@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows;
@@ -66,8 +67,12 @@ namespace DesktopFences
 
         public const uint SHGFI_ICON = 0x000000100;
         public const uint SHGFI_LARGEICON = 0x000000000;
+        public const uint SHGFI_PIDL = 0x000000008;
+        public const uint SHGFI_DISPLAYNAME = 0x000000200;
         public const uint SHGFI_TYPENAME = 0x000000400;
         public const uint SHGFI_SYSICONINDEX = 0x000004000;
+        public const uint SIGDN_NORMALDISPLAY = 0x00000000;
+        public const uint SIGDN_DESKTOPABSOLUTEPARSING = 0x80028000;
         public const int SHIL_EXTRALARGE = 0x02; // 48x48 32-bit ARGB
         public const int SHIL_JUMBO = 0x04;      // 256x256 32-bit ARGB HD
         public const int ILD_TRANSPARENT = 0x00000001;
@@ -116,6 +121,9 @@ namespace DesktopFences
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
         [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
         private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
 
@@ -152,6 +160,24 @@ namespace DesktopFences
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
+
+        [DllImport("shell32.dll", EntryPoint = "SHGetFileInfoW", CharSet = CharSet.Unicode)]
+        public static extern IntPtr SHGetFileInfoPidl(IntPtr pidl, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
+
+        [DllImport("shell32.dll")]
+        public static extern IntPtr ILCombine(IntPtr pidl1, IntPtr pidl2);
+
+        [DllImport("shell32.dll")]
+        public static extern void ILFree(IntPtr pidl);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        public static extern int SHGetNameFromIDList(IntPtr pidl, uint sigdnName, out IntPtr ppszName);
+
+        [DllImport("shell32.dll", EntryPoint = "SHEmptyRecycleBinW", CharSet = CharSet.Unicode)]
+        public static extern int SHEmptyRecycleBin(IntPtr hwnd, string pszRootPath, uint dwFlags);
 
         [DllImport("shell32.dll", EntryPoint = "#727")]
         public static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
@@ -210,6 +236,16 @@ namespace DesktopFences
 
         [DllImport("user32.dll")]
         public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        // Outside-click selection clearing (selected icons un-highlight when clicking the desktop / other apps)
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr WindowFromPoint(POINT point);
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT
@@ -812,8 +848,321 @@ namespace DesktopFences
 
     #region 4. Zero-Duplicate Real File Transfer & Fail-Safe Desktop Restoration
 
+    public class VirtualDesktopItemInfo
+    {
+        public string Clsid { get; set; }
+        public string ParsingName { get; set; }
+        public string DisplayName { get; set; }
+    }
+
+    public static class VirtualDesktopShellHelper
+    {
+        public const string VirtualExt = ".vfence";
+        private static readonly Regex GuidRegex = new Regex(@"\{[0-9A-Fa-f]{8}\-[0-9A-Fa-f]{4}\-[0-9A-Fa-f]{4}\-[0-9A-Fa-f]{4}\-[0-9A-Fa-f]{12}\}", RegexOptions.Compiled);
+
+        public static bool IsVirtualItemFile(string path)
+        {
+            return !string.IsNullOrEmpty(path) && path.EndsWith(VirtualExt, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static VirtualDesktopItemInfo ReadVirtualFile(string path)
+        {
+            if (!IsVirtualItemFile(path) || !File.Exists(path))
+                return null;
+
+            try
+            {
+                var info = new VirtualDesktopItemInfo();
+                foreach (string rawLine in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    int eq = rawLine.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string k = rawLine.Substring(0, eq).Trim();
+                    string v = rawLine.Substring(eq + 1).Trim();
+                    if (string.Equals(k, "CLSID", StringComparison.OrdinalIgnoreCase)) info.Clsid = v;
+                    else if (string.Equals(k, "ParsingName", StringComparison.OrdinalIgnoreCase)) info.ParsingName = v;
+                    else if (string.Equals(k, "DisplayName", StringComparison.OrdinalIgnoreCase)) info.DisplayName = v;
+                }
+                if (string.IsNullOrEmpty(info.ParsingName) && !string.IsNullOrEmpty(info.Clsid))
+                    info.ParsingName = "::" + info.Clsid;
+                if (string.IsNullOrEmpty(info.DisplayName))
+                    info.DisplayName = System.IO.Path.GetFileNameWithoutExtension(path);
+                return info;
+            }
+            catch { return null; }
+        }
+
+        public static List<VirtualDesktopItemInfo> ParseShellIdListArray(IDataObject dataObj, out List<string> filePathsFallback)
+        {
+            filePathsFallback = new List<string>();
+            var virtualItems = new List<VirtualDesktopItemInfo>();
+            if (dataObj == null || !dataObj.GetDataPresent("Shell IDList Array"))
+                return virtualItems;
+
+            try
+            {
+                var ms = dataObj.GetData("Shell IDList Array") as MemoryStream;
+                if (ms == null) return virtualItems;
+
+                byte[] bytes = ms.ToArray();
+                if (bytes.Length < 8) return virtualItems;
+
+                GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+                try
+                {
+                    IntPtr basePtr = handle.AddrOfPinnedObject();
+                    uint count = BitConverter.ToUInt32(bytes, 0);
+                    if (count == 0 || bytes.Length < 4 + (count + 1) * 4)
+                        return virtualItems;
+
+                    uint parentOffset = BitConverter.ToUInt32(bytes, 4);
+                    IntPtr pidlParent = IntPtr.Add(basePtr, (int)parentOffset);
+
+                    for (uint i = 1; i <= count; i++)
+                    {
+                        uint childOffset = BitConverter.ToUInt32(bytes, (int)(4 + i * 4));
+                        IntPtr pidlChild = IntPtr.Add(basePtr, (int)childOffset);
+                        IntPtr pidlFull = NativeMethods.ILCombine(pidlParent, pidlChild);
+                        if (pidlFull == IntPtr.Zero) continue;
+
+                        try
+                        {
+                            string parsingName = GetNameFromPidl(pidlFull, NativeMethods.SIGDN_DESKTOPABSOLUTEPARSING);
+                            string displayName = GetNameFromPidl(pidlFull, NativeMethods.SIGDN_NORMALDISPLAY);
+
+                            if (!string.IsNullOrEmpty(parsingName) && (File.Exists(parsingName) || Directory.Exists(parsingName)))
+                            {
+                                filePathsFallback.Add(parsingName);
+                                continue;
+                            }
+
+                            if (!string.IsNullOrEmpty(parsingName))
+                            {
+                                var matches = GuidRegex.Matches(parsingName);
+                                if (matches.Count > 0)
+                                {
+                                    string clsid = matches[matches.Count - 1].Value;
+                                    if (string.IsNullOrWhiteSpace(displayName))
+                                        displayName = "Desktop Icon";
+
+                                    virtualItems.Add(new VirtualDesktopItemInfo
+                                    {
+                                        Clsid = clsid,
+                                        ParsingName = "::" + clsid,
+                                        DisplayName = displayName
+                                    });
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            NativeMethods.ILFree(pidlFull);
+                        }
+                    }
+                }
+                finally
+                {
+                    handle.Free();
+                }
+            }
+            catch { }
+
+            return virtualItems;
+        }
+
+        private static string GetNameFromPidl(IntPtr pidl, uint sigdn)
+        {
+            IntPtr ptr = IntPtr.Zero;
+            try
+            {
+                if (NativeMethods.SHGetNameFromIDList(pidl, sigdn, out ptr) == 0 && ptr != IntPtr.Zero)
+                    return Marshal.PtrToStringUni(ptr);
+            }
+            catch { }
+            finally
+            {
+                if (ptr != IntPtr.Zero)
+                    Marshal.FreeCoTaskMem(ptr);
+            }
+            return null;
+        }
+
+        public static void SetNativeDesktopClsidHidden(string clsid, bool hideFromNativeDesktop)
+        {
+            if (string.IsNullOrWhiteSpace(clsid)) return;
+
+            string[] subKeys = new[]
+            {
+                @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
+                @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu"
+            };
+
+            foreach (string subKeyPath in subKeys)
+            {
+                try
+                {
+                    using (var key = Registry.CurrentUser.CreateSubKey(subKeyPath))
+                    {
+                        if (key == null) continue;
+
+                        // Preserve existing case if value already exists, otherwise write lowercase & standard form
+                        string targetName = clsid;
+                        foreach (string existingName in key.GetValueNames())
+                        {
+                            if (string.Equals(existingName, clsid, StringComparison.OrdinalIgnoreCase))
+                            {
+                                targetName = existingName;
+                                break;
+                            }
+                        }
+                        key.SetValue(targetName, hideFromNativeDesktop ? 1 : 0, RegistryValueKind.DWord);
+                    }
+                }
+                catch { }
+            }
+
+            RefreshNativeDesktopShell();
+        }
+
+        public static void RefreshNativeDesktopShell()
+        {
+            try
+            {
+                IntPtr host, defView, listView;
+                DesktopHostManager.ResolveDesktopHandles(out host, out defView, out listView);
+                if (defView != IntPtr.Zero)
+                {
+                    // 0x7103 = FCIDM_SHVIEW_REFRESH (Native Explorer Desktop F5 Refresh)
+                    NativeMethods.PostMessage(defView, 0x0111, new IntPtr(0x7103), IntPtr.Zero);
+                }
+                NativeMethods.SHChangeNotify(0x08000000, 0x2000, null, null);
+            }
+            catch { }
+        }
+
+        public static void InvokeVirtualVerb(VirtualDesktopItemInfo vInfo, string verb)
+        {
+            if (vInfo == null) return;
+
+            // Special handling for Windows Spotlight ("Learn about this picture") verbs & Recycle Bin
+            if (!string.IsNullOrEmpty(verb) &&
+                string.Equals(vInfo.Clsid, "{2cc5ca98-6485-489a-920e-b3e88a6ccce3}", StringComparison.OrdinalIgnoreCase))
+            {
+                InvokePidlVerb(vInfo.ParsingName, verb);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(verb))
+            {
+                if (InvokePidlVerb(vInfo.ParsingName, null))
+                    return;
+
+                try
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", "shell:" + vInfo.ParsingName) { UseShellExecute = true });
+                }
+                catch { }
+            }
+            else
+            {
+                InvokePidlVerb(vInfo.ParsingName, verb);
+            }
+        }
+
+        private static bool InvokePidlVerb(string parsingName, string verb)
+        {
+            IntPtr pidl = IntPtr.Zero;
+            try
+            {
+                uint attrs;
+                if (NativeMethods.SHParseDisplayName(parsingName, IntPtr.Zero, out pidl, 0, out attrs) == 0 && pidl != IntPtr.Zero)
+                {
+                    var sei = new NativeMethods.SHELLEXECUTEINFO();
+                    sei.cbSize = Marshal.SizeOf(sei);
+                    sei.fMask = NativeMethods.SEE_MASK_INVOKEIDLIST;
+                    sei.lpVerb = verb;
+                    sei.lpIDList = pidl;
+                    sei.nShow = 1;
+                    return NativeMethods.ShellExecuteEx(ref sei);
+                }
+            }
+            catch { }
+            finally
+            {
+                if (pidl != IntPtr.Zero)
+                    NativeMethods.ILFree(pidl);
+            }
+            return false;
+        }
+    }
+
     public static class FenceFileTransferService
     {
+        public static bool MoveVirtualItemIntoFence(VirtualDesktopItemInfo vInfo, FenceModel targetFence)
+        {
+            if (vInfo == null || string.IsNullOrEmpty(vInfo.Clsid) || targetFence == null)
+                return false;
+
+            try
+            {
+                // Remove any existing .vfence for this CLSID across all fences so zero duplicates ever exist
+                if (Directory.Exists(ConfigManager.FencesStorageRoot))
+                {
+                    foreach (string fenceDir in Directory.GetDirectories(ConfigManager.FencesStorageRoot))
+                    {
+                        foreach (string vf in Directory.GetFiles(fenceDir, "*" + VirtualDesktopShellHelper.VirtualExt))
+                        {
+                            var existing = VirtualDesktopShellHelper.ReadVirtualFile(vf);
+                            if (existing != null && string.Equals(existing.Clsid, vInfo.Clsid, StringComparison.OrdinalIgnoreCase))
+                            {
+                                try { File.Delete(vf); } catch { }
+                            }
+                        }
+                    }
+                }
+
+                string safeTitle = string.Join("_", (vInfo.DisplayName ?? "Desktop Icon").Split(System.IO.Path.GetInvalidFileNameChars())).Trim();
+                if (string.IsNullOrEmpty(safeTitle)) safeTitle = "Desktop Icon";
+
+                string targetDir = ConfigManager.GetFenceFolderPath(targetFence.Id);
+                string fileName = safeTitle + VirtualDesktopShellHelper.VirtualExt;
+                string destPath = System.IO.Path.Combine(targetDir, fileName);
+
+                string content =
+                    "CLSID=" + vInfo.Clsid + "\r\n" +
+                    "ParsingName=" + vInfo.ParsingName + "\r\n" +
+                    "DisplayName=" + vInfo.DisplayName + "\r\n";
+                File.WriteAllText(destPath, content, Encoding.UTF8);
+
+                if (!targetFence.OrderedFileNames.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+                    targetFence.OrderedFileNames.Add(fileName);
+
+                // Hide the virtual icon on the native Windows Desktop so zero duplicate remains on wallpaper!
+                VirtualDesktopShellHelper.SetNativeDesktopClsidHidden(vInfo.Clsid, true);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        public static void SweepDroppedVirtualFilesOnDesktop()
+        {
+            try
+            {
+                string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (!Directory.Exists(userDesktop)) return;
+
+                foreach (string vf in Directory.GetFiles(userDesktop, "*" + VirtualDesktopShellHelper.VirtualExt))
+                {
+                    var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(vf);
+                    try { File.Delete(vf); } catch { }
+                    if (vInfo != null && !string.IsNullOrEmpty(vInfo.Clsid))
+                    {
+                        VirtualDesktopShellHelper.SetNativeDesktopClsidHidden(vInfo.Clsid, false);
+                    }
+                }
+            }
+            catch { }
+        }
         /// <summary>
         /// Moves a file or directory safely into a Fence's managed folder on disk.
         /// Because it is MOVED from %USERPROFILE%\Desktop into the Fence folder,
@@ -896,6 +1245,17 @@ namespace DesktopFences
             {
                 if (!File.Exists(fencedItemPath) && !Directory.Exists(fencedItemPath))
                     return false;
+
+                if (VirtualDesktopShellHelper.IsVirtualItemFile(fencedItemPath))
+                {
+                    var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(fencedItemPath);
+                    try { File.Delete(fencedItemPath); } catch { }
+                    if (vInfo != null && !string.IsNullOrEmpty(vInfo.Clsid))
+                    {
+                        VirtualDesktopShellHelper.SetNativeDesktopClsidHidden(vInfo.Clsid, false);
+                    }
+                    return true;
+                }
 
                 string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 string fileName = System.IO.Path.GetFileName(fencedItemPath);
@@ -1052,7 +1412,15 @@ namespace DesktopFences
             bool isDir = Directory.Exists(path);
             string fileName = System.IO.Path.GetFileName(path);
             string displayName = fileName;
-            if (!isDir && (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".url", StringComparison.OrdinalIgnoreCase)))
+
+            if (VirtualDesktopShellHelper.IsVirtualItemFile(path))
+            {
+                var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(path);
+                displayName = (vInfo != null && !string.IsNullOrEmpty(vInfo.DisplayName))
+                    ? vInfo.DisplayName
+                    : System.IO.Path.GetFileNameWithoutExtension(path);
+            }
+            else if (!isDir && (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".url", StringComparison.OrdinalIgnoreCase)))
             {
                 displayName = System.IO.Path.GetFileNameWithoutExtension(path);
             }
@@ -1083,6 +1451,8 @@ namespace DesktopFences
 
         public static string GetItemTypeName(string path)
         {
+            if (VirtualDesktopShellHelper.IsVirtualItemFile(path))
+                return "System Desktop Icon";
             if (Directory.Exists(path))
                 return "File folder";
 
@@ -1119,12 +1489,42 @@ namespace DesktopFences
             try
             {
                 var shfi = new NativeMethods.SHFILEINFO();
-                IntPtr res = NativeMethods.SHGetFileInfo(
-                    path,
-                    0,
-                    ref shfi,
-                    (uint)Marshal.SizeOf(shfi),
-                    NativeMethods.SHGFI_SYSICONINDEX);
+                IntPtr res = IntPtr.Zero;
+
+                if (VirtualDesktopShellHelper.IsVirtualItemFile(path))
+                {
+                    var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(path);
+                    if (vInfo != null && !string.IsNullOrEmpty(vInfo.ParsingName))
+                    {
+                        IntPtr pidl = IntPtr.Zero;
+                        uint attrs;
+                        if (NativeMethods.SHParseDisplayName(vInfo.ParsingName, IntPtr.Zero, out pidl, 0, out attrs) == 0 && pidl != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                res = NativeMethods.SHGetFileInfoPidl(
+                                    pidl,
+                                    0,
+                                    ref shfi,
+                                    (uint)Marshal.SizeOf(shfi),
+                                    NativeMethods.SHGFI_PIDL | NativeMethods.SHGFI_SYSICONINDEX);
+                            }
+                            finally
+                            {
+                                NativeMethods.ILFree(pidl);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    res = NativeMethods.SHGetFileInfo(
+                        path,
+                        0,
+                        ref shfi,
+                        (uint)Marshal.SizeOf(shfi),
+                        NativeMethods.SHGFI_SYSICONINDEX);
+                }
 
                 if (res != IntPtr.Zero)
                 {
@@ -1247,6 +1647,13 @@ namespace DesktopFences
         {
             try
             {
+                if (VirtualDesktopShellHelper.IsVirtualItemFile(path))
+                {
+                    var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(path);
+                    VirtualDesktopShellHelper.InvokeVirtualVerb(vInfo, null);
+                    return;
+                }
+
                 if (File.Exists(path) || Directory.Exists(path))
                     Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
             }
@@ -1260,6 +1667,13 @@ namespace DesktopFences
         {
             try
             {
+                if (VirtualDesktopShellHelper.IsVirtualItemFile(path))
+                {
+                    var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(path);
+                    VirtualDesktopShellHelper.InvokeVirtualVerb(vInfo, "properties");
+                    return;
+                }
+
                 var info = new NativeMethods.SHELLEXECUTEINFO();
                 info.cbSize = Marshal.SizeOf(info);
                 info.lpVerb = "properties";
@@ -1273,8 +1687,17 @@ namespace DesktopFences
 
         public static bool SendToRecycleBin(IEnumerable<string> paths, bool permanent)
         {
-            var list = paths.Where(p => File.Exists(p) || Directory.Exists(p)).ToList();
-            if (list.Count == 0) return false;
+            var rawList = paths.Where(p => File.Exists(p) || Directory.Exists(p)).ToList();
+            if (rawList.Count == 0) return false;
+
+            // Virtual desktop items (Recycle Bin / Learn about this picture) should never be deleted;
+            // pressing Delete on them safely restores them back to the native Windows Desktop!
+            var virtualFiles = rawList.Where(VirtualDesktopShellHelper.IsVirtualItemFile).ToList();
+            foreach (var vf in virtualFiles)
+                FenceFileTransferService.RestoreItemToUserDesktop(vf);
+
+            var list = rawList.Where(p => !VirtualDesktopShellHelper.IsVirtualItemFile(p)).ToList();
+            if (list.Count == 0) return virtualFiles.Count > 0;
 
             try
             {
@@ -1381,6 +1804,7 @@ namespace DesktopFences
         private double _resizeDpiX = 1.0;
         private double _resizeDpiY = 1.0;
         private UIElement _capturedResizeGrip;
+        private DragDropEffects _activeDropEffect = DragDropEffects.Move;
         private bool _isDragOverActive;
         private bool _dragHasFileDrop;
         private DispatcherTimer _dragLeaveDebounceTimer;
@@ -1437,6 +1861,8 @@ namespace DesktopFences
             MouseEnter += OnWindowMouseEnter;
             MouseLeave += OnWindowMouseLeave;
             Deactivated += (_, __) => CancelActiveInteractions();
+            // Clicking anywhere in this fence (header or body) un-highlights selections in every OTHER fence
+            PreviewMouseDown += (_, __) => { if (App.Instance != null) App.Instance.ClearSelectionInOtherFences(this); };
             PreviewKeyDown += OnWindowKeyDown;
             ContextMenuOpening += OnWindowContextMenuOpening;
 
@@ -2157,6 +2583,8 @@ namespace DesktopFences
                         var data = new DataObject(DataFormats.FileDrop, dragPaths);
                         data.SetData("Preferred DropEffect", new MemoryStream(BitConverter.GetBytes((int)DragDropEffects.Move)));
                         DragDrop.DoDragDrop(_bodyGrid, data, DragDropEffects.Move);
+                        // If a virtual item (.vfence) was dropped onto the native Windows Desktop, restore its real CLSID icon!
+                        FenceFileTransferService.SweepDroppedVirtualFilesOnDesktop();
                         PopulateIcons();
                     }
                     return;
@@ -2620,6 +3048,23 @@ namespace DesktopFences
             RefreshTileSelectionVisuals();
         }
 
+        public bool HasSelection
+        {
+            get { return _selectedPaths.Count > 0; }
+        }
+
+        /// <summary>Clears highlighted icons when the user clicks outside this fence (desktop, taskbar, other apps, other fences).</summary>
+        public void ClearSelectionFromOutside()
+        {
+            if (_selectedPaths.Count == 0 && !_isMarqueeActive)
+                return;
+            if (_isMarqueeActive || _isPotentialMarquee)
+                EndMarqueeSelection();
+            _isTileLeftDragPending = false;
+            _lastClickedPath = null;
+            ClearSelection();
+        }
+
         private void RefreshTileSelectionVisuals()
         {
             Color accent = GetEffectiveAccentColor();
@@ -2653,6 +3098,10 @@ namespace DesktopFences
                     ? _selectedPaths.Count + " / " + _currentOrderedPaths.Count + " selected"
                     : _currentOrderedPaths.Count.ToString();
             }
+
+            // Arm the outside-click watcher only while something is highlighted (zero CPU when idle)
+            if (_selectedPaths.Count > 0)
+                OutsideClickSelectionWatcher.Start();
         }
 
         private ContextMenu BuildIconContextMenu(DesktopIconItem item)
@@ -2669,7 +3118,45 @@ namespace DesktopFences
             };
             cm.Items.Add(openItem);
 
-            if (item.FullPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
+            if (VirtualDesktopShellHelper.IsVirtualItemFile(item.FullPath))
+            {
+                var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(item.FullPath);
+                if (vInfo != null)
+                {
+                    // Recycle Bin special action: Empty Recycle Bin
+                    if (string.Equals(vInfo.Clsid, "{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var emptyBinItem = new MenuItem { Header = "🗑 Empty Recycle Bin" };
+                        emptyBinItem.Click += (_, __) =>
+                        {
+                            try
+                            {
+                                NativeMethods.SHEmptyRecycleBin(IntPtr.Zero, null, 0);
+                                ShellIconExtractor.InvalidateCache(item.FullPath);
+                                PopulateIcons();
+                            }
+                            catch { }
+                        };
+                        cm.Items.Add(emptyBinItem);
+                    }
+                    // Windows Spotlight ("Learn about this picture") special native verbs!
+                    else if (string.Equals(vInfo.Clsid, "{2cc5ca98-6485-489a-920e-b3e88a6ccce3}", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var nextPicItem = new MenuItem { Header = "🖼 Switch to next picture" };
+                        nextPicItem.Click += (_, __) => VirtualDesktopShellHelper.InvokeVirtualVerb(vInfo, "SpotlightNext");
+                        cm.Items.Add(nextPicItem);
+
+                        var likePicItem = new MenuItem { Header = "👍 I like this picture" };
+                        likePicItem.Click += (_, __) => VirtualDesktopShellHelper.InvokeVirtualVerb(vInfo, "SpotlightLike");
+                        cm.Items.Add(likePicItem);
+
+                        var dislikePicItem = new MenuItem { Header = "👎 Not a fan of this picture" };
+                        dislikePicItem.Click += (_, __) => VirtualDesktopShellHelper.InvokeVirtualVerb(vInfo, "SpotlightDislike");
+                        cm.Items.Add(dislikePicItem);
+                    }
+                }
+            }
+            else if (item.FullPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
                 item.FullPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
                 item.FullPath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
             {
@@ -2749,10 +3236,21 @@ namespace DesktopFences
 
             if (!_isDragOverActive)
             {
-                // Query cross-process OLE IDataObject ONLY ONCE on DragEnter (never 125x/sec in DragOver!)
-                _dragHasFileDrop = e.Data.GetDataPresent(DataFormats.FileDrop);
+                // Accept BOTH normal files (FileDrop) AND virtual Windows Desktop icons (Recycle Bin / Spotlight via "Shell IDList Array")!
+                bool hasFiles = e.Data.GetDataPresent(DataFormats.FileDrop);
+                bool hasShellIdList = !hasFiles && e.Data.GetDataPresent("Shell IDList Array");
+                _dragHasFileDrop = hasFiles || hasShellIdList;
+
                 if (_dragHasFileDrop)
                 {
+                    // Virtual shell items (Recycle Bin / Learn about this picture) only advertise DragDropEffects.Link in Explorer!
+                    if ((e.AllowedEffects & DragDropEffects.Move) != 0)
+                        _activeDropEffect = DragDropEffects.Move;
+                    else if ((e.AllowedEffects & DragDropEffects.Link) != 0)
+                        _activeDropEffect = DragDropEffects.Link;
+                    else
+                        _activeDropEffect = DragDropEffects.Copy;
+
                     _isDragOverActive = true;
                     ApplyTransparentHoverChromeState(animate: true);
                 }
@@ -2760,7 +3258,7 @@ namespace DesktopFences
 
             if (_dragHasFileDrop)
             {
-                e.Effects = DragDropEffects.Move;
+                e.Effects = _activeDropEffect;
                 e.Handled = true;
             }
         }
@@ -2772,7 +3270,7 @@ namespace DesktopFences
 
             if (_dragHasFileDrop)
             {
-                e.Effects = DragDropEffects.Move;
+                e.Effects = _activeDropEffect;
                 e.Handled = true;
             }
         }
@@ -2804,30 +3302,42 @@ namespace DesktopFences
             _dragHasFileDrop = false;
 
             string[] droppedFiles = null;
+            List<VirtualDesktopItemInfo> virtualDrops = null;
+
             try
             {
                 if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
                     droppedFiles = e.Data.GetData(DataFormats.FileDrop) as string[];
+                }
+                else if (e.Data.GetDataPresent("Shell IDList Array"))
+                {
+                    List<string> parsedFiles;
+                    virtualDrops = VirtualDesktopShellHelper.ParseShellIdListArray(e.Data, out parsedFiles);
+                    if (parsedFiles != null && parsedFiles.Count > 0)
+                        droppedFiles = parsedFiles.ToArray();
+                }
             }
             catch { }
 
-            e.Effects = DragDropEffects.Move;
+            e.Effects = _activeDropEffect;
             e.Handled = true;
 
-            if (droppedFiles == null || droppedFiles.Length == 0)
+            bool hasRealFiles = droppedFiles != null && droppedFiles.Length > 0;
+            bool hasVirtualItems = virtualDrops != null && virtualDrops.Count > 0;
+
+            if (!hasRealFiles && !hasVirtualItems)
             {
                 ApplyTransparentHoverChromeState(animate: true);
                 return;
             }
 
-            // CRITICAL ZERO-LATENCY FIX:
-            // Return from OnFencePreviewDrop IMMEDIATELY (<0.1ms) so Windows Explorer's cross-process OLE
-            // DoDragDrop loop unlocks the mouse cursor right away with zero freeze!
-            string[] batchCopy = droppedFiles.ToArray();
-            Dispatcher.BeginInvoke(new Action(() => ProcessDroppedFilesFast(batchCopy)), DispatcherPriority.Render);
+            string[] batchCopy = hasRealFiles ? droppedFiles.ToArray() : new string[0];
+            var virtualCopy = hasVirtualItems ? new List<VirtualDesktopItemInfo>(virtualDrops) : new List<VirtualDesktopItemInfo>();
+            Dispatcher.BeginInvoke(new Action(() => ProcessDroppedFilesFast(batchCopy, virtualCopy)), DispatcherPriority.Render);
         }
 
-        private void ProcessDroppedFilesFast(string[] droppedFiles)
+        private void ProcessDroppedFilesFast(string[] droppedFiles, List<VirtualDesktopItemInfo> virtualDrops)
         {
             var affectedSourceFences = new HashSet<FenceWindow>();
             SetWatcherEnabled(false);
@@ -2835,6 +3345,19 @@ namespace DesktopFences
             {
                 bool anyMoved = false;
                 string fencesRoot = ConfigManager.FencesStorageRoot;
+
+                if (virtualDrops != null && virtualDrops.Count > 0)
+                {
+                    foreach (var w in App.Instance.ActiveWindows)
+                    {
+                        if (w != this) affectedSourceFences.Add(w);
+                    }
+                    foreach (var vItem in virtualDrops)
+                    {
+                        if (FenceFileTransferService.MoveVirtualItemIntoFence(vItem, Model))
+                            anyMoved = true;
+                    }
+                }
 
                 foreach (string file in droppedFiles)
                 {
@@ -3241,6 +3764,13 @@ namespace DesktopFences
 
         private static string GetSortDisplayName(string path)
         {
+            if (VirtualDesktopShellHelper.IsVirtualItemFile(path))
+            {
+                var vInfo = VirtualDesktopShellHelper.ReadVirtualFile(path);
+                if (vInfo != null && !string.IsNullOrEmpty(vInfo.DisplayName))
+                    return vInfo.DisplayName;
+                return System.IO.Path.GetFileNameWithoutExtension(path) ?? "";
+            }
             bool isDir = Directory.Exists(path);
             if (!isDir && (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".url", StringComparison.OrdinalIgnoreCase)))
                 return System.IO.Path.GetFileNameWithoutExtension(path) ?? "";
@@ -4169,6 +4699,100 @@ namespace DesktopFences
 
     #region 7. Main Application Controller (Untouched Native Desktop, Tray & Hotkeys)
 
+    /// <summary>
+    /// Bug Fix: selected icons stayed highlighted after clicking the desktop / refreshing outside the fence.
+    /// While (and only while) any fence has a selection, this polls the physical mouse buttons. When a NEW
+    /// click lands on a window that does not belong to Desktop Fences (wallpaper, desktop icons, desktop
+    /// right-click menu, taskbar, other apps), every fence's selection is cleared, just like Windows Explorer.
+    /// Clicks on our own fences, context menus and dialogs are ignored (those handle selection themselves).
+    /// </summary>
+    internal static class OutsideClickSelectionWatcher
+    {
+        private const int VK_LBUTTON = 0x01;
+        private const int VK_RBUTTON = 0x02;
+        private const int VK_MBUTTON = 0x04;
+
+        private static DispatcherTimer _timer;
+        private static bool _wasLeftDown, _wasRightDown, _wasMiddleDown;
+        private static uint _ownProcessId;
+
+        public static void Start()
+        {
+            if (_timer == null)
+            {
+                _ownProcessId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                _timer = new DispatcherTimer(DispatcherPriority.Input) { Interval = TimeSpan.FromMilliseconds(25) };
+                _timer.Tick += OnTick;
+            }
+            if (_timer.IsEnabled)
+                return;
+
+            // Snapshot current state (and reset the "pressed since last call" bits) so the click that
+            // CREATED the selection is never mistaken for an outside click.
+            _wasLeftDown = Poll(VK_LBUTTON);
+            _wasRightDown = Poll(VK_RBUTTON);
+            _wasMiddleDown = Poll(VK_MBUTTON);
+            _timer.Start();
+        }
+
+        private static bool Poll(int vk)
+        {
+            return (NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0;
+        }
+
+        private static bool NewPress(int vk, ref bool wasDown)
+        {
+            short state = NativeMethods.GetAsyncKeyState(vk);
+            bool down = (state & 0x8000) != 0;
+            bool pressedSinceLast = (state & 0x0001) != 0; // catches very quick clicks between ticks
+            bool isNew = (down && !wasDown) || (!down && pressedSinceLast);
+            wasDown = down;
+            return isNew;
+        }
+
+        private static void OnTick(object sender, EventArgs e)
+        {
+            var app = App.Instance;
+            if (app == null || app.ActiveWindows == null || !app.ActiveWindows.Any(w => w.HasSelection))
+            {
+                _timer.Stop();
+                return;
+            }
+
+            bool l = NewPress(VK_LBUTTON, ref _wasLeftDown);
+            bool r = NewPress(VK_RBUTTON, ref _wasRightDown);
+            bool m = NewPress(VK_MBUTTON, ref _wasMiddleDown);
+            if (!(l || r || m))
+                return;
+
+            if (IsCursorOverOwnWindow())
+                return;
+
+            app.ClearSelectionInAllFences();
+            _timer.Stop();
+        }
+
+        private static bool IsCursorOverOwnWindow()
+        {
+            try
+            {
+                NativeMethods.POINT pt;
+                if (!NativeMethods.GetCursorPos(out pt))
+                    return true; // fail safe: never clear on unknown state
+                IntPtr hwnd = NativeMethods.WindowFromPoint(pt);
+                if (hwnd == IntPtr.Zero)
+                    return false;
+                uint pid;
+                NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
+                return pid == _ownProcessId;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+    }
+
     public class App : Application
     {
         public static App Instance { get; private set; }
@@ -4321,6 +4945,21 @@ namespace DesktopFences
         {
             foreach (var win in ActiveWindows)
                 win.ApplySearchFilter(query);
+        }
+
+        public void ClearSelectionInOtherFences(FenceWindow keep)
+        {
+            foreach (var win in ActiveWindows.ToList())
+            {
+                if (!ReferenceEquals(win, keep))
+                    win.ClearSelectionFromOutside();
+            }
+        }
+
+        public void ClearSelectionInAllFences()
+        {
+            foreach (var win in ActiveWindows.ToList())
+                win.ClearSelectionFromOutside();
         }
 
         public void ToggleQuickHide()
