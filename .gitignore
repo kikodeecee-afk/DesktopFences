@@ -1,0 +1,8 @@
+# Ignore user-specific runtime data & temporary logs
+Data/
+*.log
+*.user
+*.suo
+.vs/
+bin/
+obj/
